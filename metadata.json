@@ -1,0 +1,7 @@
+{
+  "name": "Doctoi",
+  "description": "Plataforma de triaje inteligente que transforma síntomas en rutas de atención claras. Encuentra especialistas y centros médicos en Perú con precisión clínica.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
