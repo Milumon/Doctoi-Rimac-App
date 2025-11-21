@@ -2,131 +2,150 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { TriageAnalysis, UrgencyLevel } from '../types';
 
+// Initialize Gemini AI
+// NOTE: For Vertex AI Search grounding to work with private data, 
+// you often need to use the Vertex AI endpoint or a backend proxy.
+// This code assumes the SDK usage pattern for Retrieval tools.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// --- VERTEX AI CONFIGURATION ---
-const PROJECT_ID = 'milumon-portfolio';
-const LOCATION = 'global'; // or us-central1
-const DATA_STORE_ID = 'doctoi-vertexia_1763755754713';
+// --- CONFIGURACIÓN VERTEX AI SEARCH (RAG) ---
+// Credenciales actualizadas para Doctoi Vertex AI
+const VERTEX_PROJECT_ID = "milumon-portfolio"; 
+const VERTEX_LOCATION = "global"; 
+const VERTEX_DATA_STORE_ID = "doctoi-datastore"; 
 
-// Define the structure of the Agent's response
-const agentSchema: Schema = {
+const triageSchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    response_text: { 
+    specialty: { type: Type.STRING, description: "Recommended medical specialty" },
+    specialtyDescription: { type: Type.STRING, description: "Short explanation of why this specialty is needed" },
+    urgency: { 
       type: Type.STRING, 
-      description: "Natural language response to the user. If using grounded information, summarize it here. Ask for location or insurance if missing." 
+      enum: [UrgencyLevel.LOW, UrgencyLevel.MODERATE, UrgencyLevel.HIGH, UrgencyLevel.EMERGENCY],
+      description: "Urgency level of the condition"
     },
-    action: {
-      type: Type.STRING,
-      enum: ["continue_conversation", "perform_triage", "search_directory", "search_pharmacy"],
-      description: "The action the frontend should take."
+    urgencyExplanation: { type: Type.STRING, description: "Why this urgency level was assigned" },
+    detectedSymptoms: { 
+      type: Type.ARRAY, 
+      items: { type: Type.STRING },
+      description: "List of symptoms extracted from user text"
     },
-    extracted_context: {
-      type: Type.OBJECT,
-      properties: {
-        location: { type: Type.STRING, description: "The extracted district, province or department (e.g., 'San Borja', 'Arequipa'). Normalize to Title Case." },
-        insurance: { type: Type.STRING, description: "The extracted insurance (e.g., 'Rimac', 'EsSalud')." },
-        symptoms_or_query: { type: Type.STRING, description: "The user's symptoms or the item they are looking for." }
-      }
+    advice: { 
+      type: Type.ARRAY, 
+      items: { type: Type.STRING },
+      description: "Immediate advice or things to avoid before seeing a doctor"
     },
-    triage_analysis: {
-      type: Type.OBJECT,
-      description: "Only populate if action is 'perform_triage' and you have enough info.",
-      properties: {
-        specialty: { type: Type.STRING },
-        specialtyDescription: { type: Type.STRING },
-        urgency: { type: Type.STRING, enum: [UrgencyLevel.LOW, UrgencyLevel.MODERATE, UrgencyLevel.HIGH, UrgencyLevel.EMERGENCY] },
-        urgencyExplanation: { type: Type.STRING },
-        detectedSymptoms: { type: Type.ARRAY, items: { type: Type.STRING } },
-        advice: { type: Type.ARRAY, items: { type: Type.STRING } },
-        confidence: { type: Type.NUMBER }
-      },
-      required: ["specialty", "specialtyDescription", "urgency", "urgencyExplanation", "detectedSymptoms", "advice", "confidence"]
-    }
+    confidence: { type: Type.NUMBER, description: "Confidence score 0-100" }
   },
-  required: ["response_text", "action", "extracted_context"]
+  required: ["specialty", "specialtyDescription", "urgency", "urgencyExplanation", "detectedSymptoms", "advice", "confidence"]
 };
 
-export interface AgentResponse {
-  response_text: string;
-  action: "continue_conversation" | "perform_triage" | "search_directory" | "search_pharmacy";
-  extracted_context: {
-    location?: string;
-    insurance?: string;
-    symptoms_or_query?: string;
-  };
-  triage_analysis?: TriageAnalysis;
-}
-
-export const chatWithDoctoi = async (
-  history: {role: string, parts: {text: string}[]}[], 
-  userMessage: string,
-  currentContext: { location?: string, insurance?: string }
-): Promise<AgentResponse> => {
-  
+export const analyzeSymptoms = async (symptoms: string): Promise<TriageAnalysis> => {
   try {
-    const systemInstruction = `
-      You are Doctoi, an intelligent medical assistant for Peru.
-      Your goal is to help users find medical care (Triage), specific clinics (Directory), or medicines (Pharmacy).
-      
-      You have access to a Knowledge Base (Vertex AI Search) containing official documents about insurance coverage (RIMAC, PACIFICO, ETC) and partner clinics.
-      ALWAYS use this grounded information when the user asks about "cobertura", "seguros", "convenios" or specific clinic rules.
-
-      RULES:
-      1. **Conversational Context**: Always analyze the chat history.
-      2. **Missing Info**: 
-         - If the user implies a medical problem, you MUST know their **Location** (District/City) and **Insurance** before performing a full triage.
-         - If the user is looking for a pharmacy or clinic, you MUST know their **Location**.
-         - If these are missing, ask for them naturally in 'response_text' and set action to 'continue_conversation'.
-         - Example: "Entiendo que te sientes mal. ¿En qué distrito te encuentras para buscar ayuda cercana?"
-      3. **Extraction**: Extract locations (e.g., "Soy de Miraflores", "Vivo en Cusco") and update 'extracted_context'.
-      4. **Actions**:
-         - 'perform_triage': Only when you have symptoms + location + insurance (or if user says 'no insurance'). Fill 'triage_analysis' object.
-         - 'search_directory': When user asks for a clinic/hospital by name or generally (e.g., "Clínica San Pablo", "Hospitales en Lima").
-         - 'search_pharmacy': When user asks for medicine/drugstores.
-      5. **Grounding**: If the user asks about insurance details (e.g., "Does Rimac cover pregnancy?"), use the provided tools/retrieval context to answer in 'response_text'.
-      6. **Tone**: Empathetic, professional, and concise. 
-      7. **Language**: Spanish.
-      
-      Current Known Context: 
-      Location: ${currentContext.location || "Unknown"}
-      Insurance: ${currentContext.insurance || "Unknown"}
-    `;
-
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: [
-        ...history,
-        { role: "user", parts: [{ text: userMessage }] }
-      ],
+      contents: `Act as a medical triage AI. Analyze the following symptoms provided by a patient in Peru. 
+      Provide a structured analysis including the recommended specialty, urgency level, and immediate advice.
+      Symptoms: "${symptoms}"`,
       config: {
-        systemInstruction: systemInstruction,
         responseMimeType: "application/json",
-        responseSchema: agentSchema,
-        // Configuration for Vertex AI Search Grounding
-        tools: [{
-            googleSearchRetrieval: {
-                dynamicRetrievalConfig: {
-                    mode: "MODE_DYNAMIC",
-                    dynamicThreshold: 0.7,
-                }
-            }
-        }]
+        responseSchema: triageSchema,
+        systemInstruction: "You are an expert medical triage assistant. Be conservative with urgency. If symptoms suggest life-threatening conditions (severe chest pain, difficulty breathing, severe bleeding), mark as Emergency. Otherwise, grade appropriately."
       }
     });
 
     if (response.text) {
-      return JSON.parse(response.text) as AgentResponse;
+        return JSON.parse(response.text) as TriageAnalysis;
     }
-    throw new Error("Empty response from Gemini");
+    throw new Error("No response text from Gemini");
 
   } catch (error) {
-    console.error("Gemini Agent Error:", error);
+    console.error("Gemini analysis failed:", error);
+    // Fallback in case of API failure (should not happen in happy path)
     return {
-      response_text: "Lo siento, tuve un problema de conexión. ¿Podrías repetirlo?",
-      action: "continue_conversation",
-      extracted_context: {}
+      specialty: "Medicina General",
+      specialtyDescription: "Análisis automático no disponible. Se recomienda evaluación general.",
+      urgency: UrgencyLevel.MODERATE,
+      urgencyExplanation: "Por precaución ante fallo de conexión.",
+      detectedSymptoms: ["Sin diagnóstico"],
+      advice: ["Acudir al centro más cercano"],
+      confidence: 0
     };
   }
 };
+
+// Changed parts type from tuple [{text: string}] to array {text: string}[] to match App.tsx usage
+export const generateFollowUp = async (history: {role: string, parts: {text: string}[]}[]): Promise<string> => {
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: history.map(h => ({ role: h.role, parts: h.parts })),
+            config: {
+                 systemInstruction: "You are a helpful medical assistant. Keep responses short, empathetic, and focused on gathering more info or reassuring the patient."
+            }
+        });
+        return response.text || "Lo siento, no pude procesar eso.";
+    } catch (e) {
+        return "Hubo un error de conexión. Intenta de nuevo.";
+    }
+}
+
+// Función RAG para consultar PDFs de seguros
+export const consultMedicalDocuments = async (query: string): Promise<string> => {
+    try {
+        // Esta función utiliza 'Grounding' con Vertex AI Search
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash", 
+            contents: `Answer the user's question about medical insurance coverage or clinic details based strictly on the provided context/documents.
+            User Query: "${query}"`,
+            config: {
+                // Definimos la herramienta de recuperación (Retrieval)
+                tools: [{
+                    retrieval: {
+                        vertexAiSearch: {
+                            datastore: `projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/collections/default_collection/dataStores/${VERTEX_DATA_STORE_ID}`
+                        }
+                    }
+                }]
+            }
+        });
+
+        // Cuando se usa Grounding, la respuesta suele venir en texto plano con citas
+        // Si no hay info en los documentos, Gemini dirá que no lo sabe (evita alucinaciones)
+        return response.text || "No encontré esa información específica en los documentos de las aseguradoras.";
+    } catch (e) {
+        console.error("Error consultando documentos (RAG):", e);
+        // Fallback silencioso a una respuesta genérica si RAG no está configurado aún
+        return "Lo siento, en este momento no puedo acceder a los detalles específicos de las pólizas. Por favor contacta a la clínica directamente.";
+    }
+}
+
+// Intent Classification
+export const classifyUserIntent = async (text: string): Promise<'triage' | 'pharmacy' | 'directory'> => {
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `Classify this user input into one of three categories:
+            1. 'triage': User is describing a pain, symptom, sickness, or feeling unwell. (e.g. "I have a headache", "my stomach hurts", "fever").
+            2. 'pharmacy': User is looking for a specific medication, pill, or pharmacy product. (e.g. "I need paracetamol", "where to buy amoxicillin", "price of aspirin").
+            3. 'directory': User is looking for a specific clinic, hospital, phone number, or medical center by name or location, NOT describing a symptom. (e.g. "Clinica San Pablo", "Hospital Rebagliati", "Telephone of Clinica Ricardo Palma", "San Borja clinics").
+            
+            Input: "${text}"`,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        intent: { type: Type.STRING, enum: ["triage", "pharmacy", "directory"] }
+                    }
+                }
+            }
+        });
+        
+        const result = JSON.parse(response.text || "{}");
+        return result.intent || 'triage';
+    } catch (e) {
+        console.error(e);
+        return 'triage'; // Fallback
+    }
+}

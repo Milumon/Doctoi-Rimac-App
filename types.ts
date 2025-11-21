@@ -3,10 +3,7 @@ export interface Message {
   id: string;
   text: string;
   sender: 'user' | 'ai';
-  type?: 'text' | 'analysis' | 'medical_centers';
-  // Optional data payloads for rich messages
-  analysisData?: TriageAnalysis;
-  medicalCentersData?: MedicalCenter[];
+  type?: 'text' | 'department_selector' | 'province_selector' | 'district_selector' | 'insurance_selector' | 'intent_selector';
 }
 
 export enum UrgencyLevel {
