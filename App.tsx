@@ -435,10 +435,29 @@ export default function App() {
   return (
     <div className="h-full w-full overflow-hidden flex flex-col md:items-center md:justify-center md:p-8 relative">
        
-       {/* Background Decoration */}
-       <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
-          <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-blue-50/50 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-emerald-50/50 rounded-full blur-3xl"></div>
+       {/* GLOBAL BACKGROUND: Unified background for the whole app */}
+       <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none bg-slate-50">
+          {/* Animated Blobs */}
+          <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] md:w-[500px] md:h-[500px] bg-blue-200/40 md:bg-blue-100/50 rounded-full blur-[80px] md:blur-3xl animate-blob"></div>
+          
+          {/* Decorative Background Logo (Global) - Positioned bottom right */}
+          <div className="absolute bottom-[-50px] right-[-50px] md:bottom-[-80px] md:right-[-80px] opacity-10 md:opacity-20 transform rotate-[-15deg] scale-150">
+             <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <linearGradient id="bg-grad-main" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+                        <stop stopColor="#F8FAFC"/> 
+                        <stop offset="1" stopColor="#F0FDFA"/> 
+                    </linearGradient>
+                    <linearGradient id="bg-grad-stetho" x1="100" y1="100" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+                        <stop stopColor="#2DD4BF"/> 
+                        <stop offset="1" stopColor="#0EA5E9"/> 
+                    </linearGradient>
+                </defs>
+                <rect width="512" height="512" rx="120" fill="url(#bg-grad-main)" fillOpacity="0.5"/>
+                <path d="M256 80 V 120 C 256 150 320 120 320 180 V 260 C 320 310 280 340 256 340" stroke="url(#bg-grad-stetho)" strokeWidth="18" strokeLinecap="round" opacity="0.6"/>
+                <circle cx="256" cy="340" r="32" fill="url(#bg-grad-stetho)" opacity="0.6"/>
+            </svg>
+          </div>
        </div>
 
        {/* Mobile Welcome Overlay */}
@@ -491,48 +510,52 @@ export default function App() {
              )}
           </div>
 
-          {/* MOBILE LAYOUT */}
-          <div className="lg:hidden h-full w-full relative">
+          {/* MOBILE LAYOUT: FLEX COLUMN to stack NavBar at bottom */}
+          <div className="lg:hidden h-full w-full flex flex-col">
               
-              <div className={`absolute inset-x-0 top-0 bottom-28 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'chat' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
-                   <ChatPanel 
-                        messages={messages} 
-                        onSendMessage={handleSendMessage}
-                        onSelectIntent={handleSelectIntent}
-                        onSelectDepartment={handleSelectDepartment}
-                        onSelectProvince={handleSelectProvince}
-                        onSelectDistrict={handleSelectDistrict}
-                        onSelectInsurance={handleSelectInsurance}
-                        onReset={handleReset}
-                        onRequestLocation={handleRequestLocation}
-                        isTyping={isTyping}
-                        isRequestingLocation={isRequestingLocation}
-                        currentStep={step}
-                        selectedDepartmentId={selectedDepartmentId}
-                        selectedProvinceId={selectedProvinceId}
-                        flow={flow}
-                    />
+              {/* Content Area: Takes remaining space (flex-1) */}
+              <div className="flex-1 relative overflow-hidden w-full">
+                  <div className={`absolute inset-0 transition-opacity duration-300 bg-slate-50/50 ${mobileTab === 'chat' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
+                       <ChatPanel 
+                            messages={messages} 
+                            onSendMessage={handleSendMessage}
+                            onSelectIntent={handleSelectIntent}
+                            onSelectDepartment={handleSelectDepartment}
+                            onSelectProvince={handleSelectProvince}
+                            onSelectDistrict={handleSelectDistrict}
+                            onSelectInsurance={handleSelectInsurance}
+                            onReset={handleReset}
+                            onRequestLocation={handleRequestLocation}
+                            isTyping={isTyping}
+                            isRequestingLocation={isRequestingLocation}
+                            currentStep={step}
+                            selectedDepartmentId={selectedDepartmentId}
+                            selectedProvinceId={selectedProvinceId}
+                            flow={flow}
+                        />
+                  </div>
+
+                  {hasAnalysis && (
+                      <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'analysis' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
+                          {analysis && <AnalysisPanel analysis={analysis} />}
+                      </div>
+                  )}
+
+                  {hasResults && (
+                       <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'results' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
+                           <ResultsPanel 
+                                centers={medicalCenters} 
+                                onSelectCenter={setSelectedCenter} 
+                                userDistrict={district}
+                                userInsurance={insurance}
+                                flow={flow}
+                                query={symptomsOrMed}
+                            />
+                       </div>
+                  )}
               </div>
 
-              {hasAnalysis && (
-                  <div className={`absolute inset-x-0 top-0 bottom-28 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'analysis' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
-                      {analysis && <AnalysisPanel analysis={analysis} />}
-                  </div>
-              )}
-
-              {hasResults && (
-                   <div className={`absolute inset-x-0 top-0 bottom-28 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'results' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
-                       <ResultsPanel 
-                            centers={medicalCenters} 
-                            onSelectCenter={setSelectedCenter} 
-                            userDistrict={district}
-                            userInsurance={insurance}
-                            flow={flow}
-                            query={symptomsOrMed}
-                        />
-                   </div>
-              )}
-              
+              {/* Navigation Bar: Stacks at the bottom naturally */}
               <MobileNavBar 
                 activeTab={mobileTab} 
                 setActiveTab={setMobileTab} 

@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 interface MobileWelcomeProps {
@@ -35,7 +36,9 @@ export const MobileWelcome: React.FC<MobileWelcomeProps> = ({ onStart, onInstall
                         <feDropShadow dx="0" dy="10" stdDeviation="15" floodColor="#0F766E" floodOpacity="0.15"/>
                     </filter>
                 </defs>
-                <rect width="512" height="512" rx="120" fill="url(#mob-bg)"/>
+                {/* Base Shape - Added Transparency */}
+                <rect width="512" height="512" rx="120" fill="url(#mob-bg)" fillOpacity="0.85"/>
+                
                 <rect x="146" y="116" width="220" height="280" rx="20" fill="#FFFFFF" filter="url(#mob-shadow)"/>
                 <rect x="176" y="160" width="80" height="8" rx="4" fill="#E2E8F0"/>
                 <rect x="176" y="190" width="160" height="8" rx="4" fill="#F1F5F9"/>
@@ -45,7 +48,9 @@ export const MobileWelcome: React.FC<MobileWelcomeProps> = ({ onStart, onInstall
                 <circle cx="256" cy="340" r="32" fill="url(#mob-stetho)"/>
                 <circle cx="256" cy="340" r="24" fill="#FFFFFF" opacity="0.2"/> 
                 <circle cx="256" cy="340" r="12" fill="#FFFFFF"/> 
-                <path d="M360 130 L 365 140 L 375 145 L 365 150 L 360 160 L 355 150 L 345 145 L 355 140 Z" fill="#2DD4BF"/>
+                
+                {/* Spark - Added Transparency */}
+                <path d="M360 130 L 365 140 L 375 145 L 365 150 L 360 160 L 355 150 L 345 145 L 355 140 Z" fill="#2DD4BF" fillOpacity="0.6"/>
             </svg>
         </div>
 

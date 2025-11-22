@@ -87,7 +87,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }
 
   return (
-    <section className="col-span-12 lg:col-span-4 h-full bg-white lg:bg-white/90 lg:backdrop-blur-xl rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white flex flex-col overflow-hidden z-20 relative transition-all duration-500">
+    <section className="col-span-12 lg:col-span-4 h-full bg-white lg:bg-white/90 backdrop-blur-xl lg:rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-b lg:border border-white flex flex-col overflow-hidden z-20 relative transition-all duration-500">
       {/* Header */}
       <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-white lg:bg-white/50 relative z-30 flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -287,8 +287,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         <div ref={endRef} />
       </div>
 
-      {/* Input Area */}
-      <div className="p-4 bg-white border-t border-slate-50 relative flex-shrink-0 z-20 flex-grow-0">
+      {/* Input Area - Removed pb-28 padding */}
+      <div className="p-4 pb-4 bg-white border-t border-slate-50 relative flex-shrink-0 z-20 transition-all">
         {currentStep === 1 && flow === 'triage' && (
             <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
             <button onClick={() => setInput('Tengo fiebre alta y me duele la cabeza')} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">🤒 Fiebre alta</button>

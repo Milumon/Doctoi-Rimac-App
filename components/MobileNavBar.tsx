@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 interface MobileNavBarProps {
@@ -9,7 +10,7 @@ interface MobileNavBarProps {
 
 export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActiveTab, hasAnalysis, hasResults }) => {
   return (
-    <div className="lg:hidden fixed bottom-6 left-4 right-4 h-16 bg-white/90 backdrop-blur-xl rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/50 z-50 flex items-center justify-around px-2">
+    <div className="lg:hidden w-full h-20 bg-white/95 backdrop-blur-xl rounded-t-[2rem] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] border-t border-slate-100 z-50 flex items-center justify-around px-2 flex-shrink-0">
       
       <button 
         onClick={() => setActiveTab('chat')}

@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { TriageAnalysis, UrgencyLevel } from '../types';
 
@@ -19,7 +20,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis }) => {
   const colors = getUrgencyColors(analysis.urgency);
 
   return (
-    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl rounded-[2.5rem] shadow-lg border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter">
+    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter">
       <div className="px-6 py-5 border-b border-slate-50 bg-blue-50/30 flex justify-between items-center">
         <span className="text-sm font-bold text-blue-900 flex items-center gap-2">
           <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
@@ -28,7 +29,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis }) => {
         <span className="text-[10px] font-bold px-2 py-1 bg-blue-100 text-blue-700 rounded-full">{analysis.confidence}% Confianza</span>
       </div>
 
-      <div className="p-6 overflow-y-auto space-y-6 no-scrollbar">
+      <div className="p-6 pb-4 overflow-y-auto space-y-6 no-scrollbar">
         {/* Specialty */}
         <div className="text-center mt-2">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg shadow-blue-200 mb-3 text-3xl">

@@ -84,7 +84,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({ centers, onSelectCen
   else title = `Recomendados (${userDistrict})`;
 
   return (
-    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl rounded-[2.5rem] shadow-lg border border-white flex flex-col overflow-hidden z-10 animate-fade-enter">
+    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden z-10 animate-fade-enter">
       <div className={`px-6 py-5 border-b border-slate-50 bg-${headerColor}-50/30 flex justify-between items-center`}>
         <span className={`text-sm font-bold text-${headerColor}-900 flex items-center gap-2`}>
           <svg className={`w-4 h-4 text-${headerColor}-600`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path></svg>
@@ -99,7 +99,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({ centers, onSelectCen
           </div>
       )}
 
-      <div className="p-4 overflow-y-auto space-y-4 bg-slate-50/50 flex-1 no-scrollbar">
+      <div className="p-4 pb-4 overflow-y-auto space-y-4 bg-slate-50/50 flex-1 no-scrollbar">
         {displayCenters.length === 0 && (
              <div className="text-center p-10 text-slate-400 text-sm">No se encontraron lugares exactos.</div>
         )}
