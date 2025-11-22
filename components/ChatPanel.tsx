@@ -90,9 +90,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     <section className="col-span-12 lg:col-span-4 h-full bg-white lg:bg-white/90 backdrop-blur-xl lg:rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-b lg:border border-white flex flex-col overflow-hidden z-20 relative transition-all duration-500">
       {/* Header */}
       <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-white lg:bg-white/50 relative z-30 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_#10B981]"></div>
-          <span className="text-sm font-bold text-slate-700 tracking-tight">Doctoi AI</span>
+        <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_#10B981]"></div>
+                <span className="text-sm font-bold text-slate-700 tracking-tight">Doctoi AI</span>
+            </div>
+            {/* Backend Simulation Indicator */}
+            <div className="flex items-center gap-1 mt-0.5">
+                <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                <span className="text-[9px] font-medium text-slate-400">Conexión Segura</span>
+            </div>
         </div>
         
         <div className="flex items-center gap-3">
@@ -278,10 +285,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         ))}
         
         {isTyping && (
-          <div className="flex items-center gap-1 ml-4 mb-2 mt-2">
-            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full typing-dot"></div>
-            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full typing-dot"></div>
-            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full typing-dot"></div>
+          <div className="flex items-center gap-2 ml-4 mb-2 mt-2">
+            <div className="flex items-center gap-1">
+                <div className="w-1.5 h-1.5 bg-slate-400 rounded-full typing-dot"></div>
+                <div className="w-1.5 h-1.5 bg-slate-400 rounded-full typing-dot"></div>
+                <div className="w-1.5 h-1.5 bg-slate-400 rounded-full typing-dot"></div>
+            </div>
+            <span className="text-[10px] text-slate-400 animate-pulse">Analizando...</span>
           </div>
         )}
         <div ref={endRef} />

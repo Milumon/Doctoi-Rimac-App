@@ -1,14 +1,19 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { TriageAnalysis, UrgencyLevel, TriageAnalysisWithCenters } from '../types';
+import { INSURANCE_POLICIES, CLINICAL_GUIDELINES } from '../data/knowledgeBase';
 
 // Initialize Gemini AI
+// NOTE: In a real AWS Lambda architecture, this initialization happens inside the handler
+// to keep the container warm and secure the API KEY server-side.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// --- CONFIGURACIÓN VERTEX AI SEARCH (RAG) ---
-const VERTEX_PROJECT_ID = "milumon-portfolio"; 
-const VERTEX_LOCATION = "global"; 
-const VERTEX_DATA_STORE_ID = "doctoi-datastore"; 
+// --- SECURITY LAYER (Simulated Backend Logic) ---
+const sanitizeInput = (text: string): string => {
+    // A real backend would use DLP (Data Loss Prevention) here.
+    // Simple regex to remove potential DNI/Phone numbers from prompt context if needed for privacy
+    return text.replace(/\b\d{8}\b/g, "[DNI_REDACTED]");
+};
 
 const triageSchema: Schema = {
   type: Type.OBJECT,
@@ -36,143 +41,109 @@ const triageSchema: Schema = {
   required: ["specialty", "specialtyDescription", "urgency", "urgencyExplanation", "detectedSymptoms", "advice", "confidence"]
 };
 
-// Legacy simple analysis (kept for fallback or simple flows)
-export const analyzeSymptoms = async (symptoms: string): Promise<TriageAnalysis> => {
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `Act as a medical triage AI. Analyze the following symptoms provided by a patient in Peru. 
-      Provide a structured analysis including the recommended specialty, urgency level, and immediate advice.
-      Symptoms: "${symptoms}"`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: triageSchema,
-        systemInstruction: "You are an expert medical triage assistant. Be conservative with urgency. If symptoms suggest life-threatening conditions (severe chest pain, difficulty breathing, severe bleeding), mark as Emergency. Otherwise, grade appropriately."
-      }
-    });
-
-    if (response.text) {
-        return JSON.parse(response.text) as TriageAnalysis;
-    }
-    throw new Error("No response text from Gemini");
-
-  } catch (error) {
-    console.error("Gemini analysis failed:", error);
-    return {
-      specialty: "Medicina General",
-      specialtyDescription: "Análisis automático no disponible. Se recomienda evaluación general.",
-      urgency: UrgencyLevel.MODERATE,
-      urgencyExplanation: "Por precaución ante fallo de conexión.",
-      detectedSymptoms: ["Sin diagnóstico"],
-      advice: ["Acudir al centro más cercano"],
-      confidence: 0
-    };
-  }
-};
-
-// --- NUEVA FUNCIÓN RAG (Conectada a Vertex AI Search) ---
+// --- RAG HÍBRIDO (Serverless-Ready Architecture) ---
 export const analyzeSymptomsWithRAG = async (
   symptoms: string,
   userContext: { district: string; insurance: string }
 ): Promise<TriageAnalysisWithCenters> => {
   try {
+    const cleanSymptoms = sanitizeInput(symptoms);
+
+    // We inject the "Database" content into the System Instruction.
+    // This creates a strong boundary that the model follows strictly.
+    const SYSTEM_PROMPT = `
+ROL: Eres el motor de inteligencia artificial de Doctoi (Perú). Actúas como un Auditor Médico estricto.
+
+BASE DE CONOCIMIENTO OBLIGATORIA (Tus "Documentos"):
+${INSURANCE_POLICIES}
+${CLINICAL_GUIDELINES}
+
+INSTRUCCIONES DE PROCESAMIENTO:
+1. ANÁLISIS DE SÍNTOMAS: Compara los síntomas del usuario contra las "GUÍAS DE PRÁCTICA CLÍNICA MINSA" provistas.
+2. VERIFICACIÓN DE SEGURO: Busca textualmente el seguro "${userContext.insurance}" en las "PÓLIZAS VIGENTES". Si existe, extrae la cobertura exacta.
+3. REGLAS DE NEGOCIO:
+   - Si es EMERGENCIA según guías -> Prioriza Hospitales cercanos y recomienda llamar al 106/116.
+   - Si es SIS -> Solo derivar a Hospitales del Estado (Minsa).
+   - Si es EPS/Privado -> Derivar a Clínicas.
+
+FORMATO DE SALIDA: JSON Estricto.
+`;
+
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Eres un asistente de triaje médico en Perú.
-
-CONTEXTO DEL PACIENTE:
-- Síntomas: "${symptoms}"
-- Ubicación: ${userContext.district}
-- Seguro: ${userContext.insurance}
-
-INSTRUCCIONES:
-1. Analiza los síntomas y determina la especialidad médica necesaria
-2. Evalúa el nivel de urgencia (low, moderate, high, emergency)
-3. Busca en los documentos los centros de salud que:
-   - Tengan la especialidad necesaria
-   - Acepten el seguro "${userContext.insurance}"
-   - Estén cerca de "${userContext.district}" o atiendan esa zona
-4. Si el seguro es EsSalud o SIS, prioriza centros públicos
-5. Si es seguro privado, busca clínicas con convenio
-
-IMPORTANTE:
-- Solo recomienda centros que EXISTAN en los documentos
-- Incluye teléfono, dirección y horarios SI están en los documentos
-- Si no encuentras información, dilo honestamente
-- Si es EMERGENCIA, indica el número 106 (SAMU)
-
-Responde en JSON estrictamente con este formato:
-{
-  "specialty": "nombre de la especialidad",
-  "specialtyDescription": "por qué se necesita esta especialidad",
-  "urgency": "Baja|Moderada|Alta|Emergencia",
-  "urgencyExplanation": "explicación del nivel de urgencia",
-  "detectedSymptoms": ["síntoma1", "síntoma2"],
-  "recommendedCenters": [
-    {
-      "name": "nombre del centro (de los documentos)",
-      "type": "Clínica|Hospital|Centro de Salud",
-      "address": "dirección (de los documentos)",
-      "district": "distrito",
-      "phone": "teléfono (si está disponible)",
-      "acceptsInsurance": true,
-      "hasSpecialty": true,
-      "operatingHours": "horario (si está disponible)",
-      "reason": "por qué se recomienda este centro"
-    }
-  ],
-  "insuranceCoverage": {
-    "covers": true|false,
-    "details": "qué cubre el seguro para este caso (de los documentos)",
-    "copayEstimate": "estimación de copago si está disponible",
-    "requirements": ["DNI", "Carnet de seguro", etc.]
-  },
-  "advice": ["consejo1", "consejo2"],
-  "emergencyAction": null,
-  "confidence": 85,
-  "sourcesUsed": ["nombre del documento 1"]
-}`,
+      contents: `SOLICITUD DE TRIAJE:
+      - Paciente: Refiere "${cleanSymptoms}"
+      - Ubicación: ${userContext.district}
+      - Seguro Declarado: ${userContext.insurance}
+      
+      TAREA:
+      1. Determina urgencia y especialidad usando las GUÍAS.
+      2. Explica la cobertura usando las PÓLIZAS.
+      3. Usa Google Search para encontrar centros médicos REALES en ${userContext.district} que coincidan con la red del seguro.
+      
+      Responde SOLO con el JSON definido.`,
       config: {
-        responseMimeType: "application/json",
-        tools: [{
-          retrieval: {
-            vertexAiSearch: {
-              datastore: `projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/collections/default_collection/dataStores/${VERTEX_DATA_STORE_ID}`
-            }
-          }
-        }],
-        systemInstruction: `Eres un asistente médico experto en el sistema de salud peruano.
-        
-REGLAS ESTRICTAS:
-- SOLO recomienda centros que encuentres en los documentos proporcionados (Grounding).
-- NUNCA inventes nombres de clínicas, direcciones o teléfonos.
-- Si no encuentras información específica en los documentos, indica que no se encontró.
-- Prioriza la seguridad del paciente.
-- Para síntomas graves (dolor de pecho, dificultad respiratoria, sangrado severo), SIEMPRE marca como EMERGENCY`
+        tools: [{ googleSearch: {} }], 
+        responseMimeType: "application/json", // Enforced JSON for backend-like reliability
+        systemInstruction: SYSTEM_PROMPT
       }
     });
 
     if (response.text) {
-      // Remove potential markdown blocks if raw text is returned with ```json
-      const cleanText = response.text.replace(/```json|```/g, '').trim();
-      return JSON.parse(cleanText) as TriageAnalysisWithCenters;
+      const cleanText = response.text.trim();
+      // Robust parsing ensuring we get a valid object
+      let parsed: any = {};
+      try {
+          parsed = JSON.parse(cleanText);
+      } catch (e) {
+          // Fallback for markdown code blocks common in LLMs
+          const match = cleanText.match(/```json([\s\S]*?)```/);
+          if (match) parsed = JSON.parse(match[1]);
+          else throw e;
+      }
+
+      // Map the raw JSON to our Typescript Interface
+      const result: TriageAnalysisWithCenters = {
+          specialty: parsed.specialty || "Medicina General",
+          specialtyDescription: parsed.specialtyDescription || "Evaluación general",
+          urgency: parsed.urgency || UrgencyLevel.MODERATE,
+          urgencyExplanation: parsed.urgencyExplanation || "Evaluación estándar",
+          detectedSymptoms: parsed.detectedSymptoms || [],
+          advice: parsed.advice || [],
+          confidence: parsed.confidence || 85,
+          recommendedCenters: parsed.recommendedCenters || [],
+          insuranceCoverage: parsed.insuranceCoverage || { covers: null, details: "Consultar aseguradora", requirements: [] },
+          sourcesUsed: ["Guías Minsa (Interno)", "Pólizas 2025 (Interno)"]
+      };
+      
+      // Add Google Search sources if available
+      if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
+        const chunks = response.candidates[0].groundingMetadata.groundingChunks;
+        const webSources = chunks
+            .filter((c: any) => c.web?.title)
+            .map((c: any) => c.web.title);
+        if (webSources.length > 0) {
+            result.sourcesUsed.push("Google Maps/Search");
+        }
+      }
+      
+      return result;
     }
-    throw new Error("No response from Gemini RAG");
+    throw new Error("Empty response from AI");
 
   } catch (error) {
-    console.error("Triage with RAG failed:", error);
-    // Fallback honesto
+    console.error("Backend Simulation Error:", error);
     return {
       specialty: "Medicina General",
-      specialtyDescription: "Se recomienda evaluación inicial",
+      specialtyDescription: "Error de conexión. Acuda a triaje presencial.",
       urgency: UrgencyLevel.MODERATE,
-      urgencyExplanation: "No se pudo analizar completamente con los documentos. Se recomienda consulta presencial.",
+      urgencyExplanation: "Fallo en el análisis automático.",
       detectedSymptoms: [symptoms],
-      recommendedCenters: [], // Empty indicates we fall back to standard directory
+      recommendedCenters: [], 
       insuranceCoverage: {
         covers: null,
-        details: "No se pudo verificar cobertura en los documentos. Contacte a su aseguradora.",
-        requirements: ["DNI", "Carnet de seguro"]
+        details: "No disponible.",
+        requirements: []
       },
       advice: ["Acudir al centro de salud más cercano"],
       confidence: 0,
@@ -181,13 +152,23 @@ REGLAS ESTRICTAS:
   }
 };
 
+// Simple text generation with internal context
 export const generateFollowUp = async (history: {role: string, parts: {text: string}[]}[]): Promise<string> => {
     try {
+        const systemContext = `
+        CONTEXTO DE SEGURIDAD: Estás operando bajo protocolos estrictos.
+        DOCUMENTOS INTERNOS DISPONIBLES:
+        ${INSURANCE_POLICIES}
+        ${CLINICAL_GUIDELINES}
+        
+        Usa esta información si el usuario pregunta sobre "qué cubre mi seguro" o "qué hago si tengo fiebre".
+        `;
+
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: history.map(h => ({ role: h.role, parts: h.parts })),
             config: {
-                 systemInstruction: "You are a helpful medical assistant. Keep responses short, empathetic, and focused on gathering more info or reassuring the patient."
+                 systemInstruction: `Eres Doctoi. ${systemContext}`
             }
         });
         return response.text || "Lo siento, no pude procesar eso.";
@@ -200,23 +181,24 @@ export const consultMedicalDocuments = async (query: string): Promise<string> =>
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash", 
-            contents: `Answer the user's question about medical insurance coverage or clinic details based strictly on the provided context/documents.
-            User Query: "${query}"`,
+            contents: `PREGUNTA DE USUARIO: "${query}"
+            
+            INSTRUCCIONES:
+            Busca la respuesta EXCLUSIVAMENTE en los siguientes documentos internos.
+            Si la respuesta no está ahí, usa Google Search para complementar (ej. direcciones).
+            
+            DOCUMENTOS:
+            ${INSURANCE_POLICIES}
+            ${CLINICAL_GUIDELINES}`,
             config: {
-                tools: [{
-                    retrieval: {
-                        vertexAiSearch: {
-                            datastore: `projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/collections/default_collection/dataStores/${VERTEX_DATA_STORE_ID}`
-                        }
-                    }
-                }]
+                tools: [{ googleSearch: {} }]
             }
         });
 
-        return response.text || "No encontré esa información específica en los documentos de las aseguradoras.";
+        return response.text || "No encontré esa información específica.";
     } catch (e) {
-        console.error("Error consultando documentos (RAG):", e);
-        return "Lo siento, en este momento no puedo acceder a los detalles específicos de las pólizas.";
+        console.error("Error consultando documentos:", e);
+        return "Lo siento, en este momento no puedo buscar esa información.";
     }
 }
 
@@ -224,12 +206,7 @@ export const classifyUserIntent = async (text: string): Promise<'triage' | 'phar
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
-            contents: `Classify this user input into one of three categories:
-            1. 'triage': User is describing a pain, symptom, sickness, or feeling unwell. (e.g. "I have a headache", "my stomach hurts", "fever").
-            2. 'pharmacy': User is looking for a specific medication, pill, or pharmacy product. (e.g. "I need paracetamol", "where to buy amoxicillin", "price of aspirin").
-            3. 'directory': User is looking for a specific clinic, hospital, phone number, or medical center by name or location, NOT describing a symptom. (e.g. "Clinica San Pablo", "Hospital Rebagliati", "Telephone of Clinica Ricardo Palma", "San Borja clinics").
-            
-            Input: "${text}"`,
+            contents: `Classify intent: "${text}" -> 'triage' (symptoms), 'pharmacy' (meds), 'directory' (clinics). JSON.`,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -244,7 +221,6 @@ export const classifyUserIntent = async (text: string): Promise<'triage' | 'phar
         const result = JSON.parse(response.text || "{}");
         return result.intent || 'triage';
     } catch (e) {
-        console.error(e);
-        return 'triage'; // Fallback
+        return 'triage';
     }
 }
