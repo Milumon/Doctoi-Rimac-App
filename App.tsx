@@ -6,11 +6,11 @@ import { AnalysisPanel } from './components/AnalysisPanel';
 import { ResultsPanel } from './components/ResultsPanel';
 import { DetailModal } from './components/DetailModal';
 import { MobileNavBar } from './components/MobileNavBar';
-import { MobileWelcome } from './components/MobileWelcome'; // Import new component
-import { Message, TriageAnalysis, MedicalCenter } from './types';
+import { MobileWelcome } from './components/MobileWelcome';
+import { Message, TriageAnalysisWithCenters, MedicalCenter } from './types';
 import { medicalCenters } from './data/centers';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
-import { analyzeSymptoms, generateFollowUp, classifyUserIntent, consultMedicalDocuments } from './services/geminiService';
+import { analyzeSymptomsWithRAG, generateFollowUp, classifyUserIntent, consultMedicalDocuments } from './services/geminiService';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
@@ -49,15 +49,13 @@ export default function App() {
   const [district, setDistrict] = useState('');
   const [insurance, setInsurance] = useState('');
   
-  const [analysis, setAnalysis] = useState<TriageAnalysis | null>(null);
+  const [analysis, setAnalysis] = useState<TriageAnalysisWithCenters | null>(null);
   const [selectedCenter, setSelectedCenter] = useState<MedicalCenter | null>(null);
 
   // PWA Install Prompt Listener
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
-      // Prevent Chrome 67 and earlier from automatically showing the prompt
       e.preventDefault();
-      // Stash the event so it can be triggered later.
       setDeferredPrompt(e);
     };
 
@@ -70,12 +68,9 @@ export default function App() {
 
   const handleInstallApp = async () => {
     if (!deferredPrompt) return;
-    // Show the install prompt
     deferredPrompt.prompt();
-    // Wait for the user to respond to the prompt
     const { outcome } = await deferredPrompt.userChoice;
     console.log(`User response to the install prompt: ${outcome}`);
-    // We've used the prompt, and can't use it again, throw it away
     setDeferredPrompt(null);
   };
 
@@ -87,7 +82,7 @@ export default function App() {
   const handleSelectIntent = (selectedFlow: 'triage' | 'pharmacy' | 'directory') => {
       const currentSession = sessionRef.current;
       setFlow(selectedFlow);
-      setMobileTab('chat'); // Ensure we are on chat tab
+      setMobileTab('chat'); 
       let intentText = '';
       if (selectedFlow === 'pharmacy') intentText = 'Busco medicamentos';
       else if (selectedFlow === 'directory') intentText = 'Busco una clínica específica';
@@ -115,13 +110,13 @@ export default function App() {
     addMessage(text, 'user');
     setIsTyping(true);
 
-    // STEP 0: INTELLIGENT CLASSIFICATION (User typed directly)
+    // STEP 0: INTELLIGENT CLASSIFICATION
     if (step === 0) {
         const detectedIntent = await classifyUserIntent(text);
         if (sessionRef.current !== currentSession) return;
 
         setFlow(detectedIntent);
-        setSymptomsOrMed(text); // Save what they typed
+        setSymptomsOrMed(text); 
         setMobileTab('chat');
         
         setTimeout(() => {
@@ -147,7 +142,7 @@ export default function App() {
         return;
     }
 
-    // Step 1: User inputs symptoms/medicine/query manually AFTER clicking a card
+    // Step 1: User inputs symptoms/medicine/query manually
     if (step === 1) {
         setSymptomsOrMed(text);
         setTimeout(() => {
@@ -168,13 +163,12 @@ export default function App() {
             if (flow === 'pharmacy') {
                 addMessage(`Buscaré farmacias en ${text}.`, 'ai');
                 setStep(3);
-                setMobileTab('results'); // Auto switch to results on mobile
+                setMobileTab('results'); 
             } else if (flow === 'directory') {
                 addMessage(`Buscando en ${text}...`, 'ai');
                 setStep(3);
-                setMobileTab('results'); // Auto switch to results on mobile
+                setMobileTab('results'); 
             } else {
-                // Go to insurance for Triage
                 addMessage(`Perfecto, buscaré en ${text}. Por último, ¿qué seguro tienes?`, 'ai');
                 addMessage('', 'ai', 'insurance_selector');
                 setStep(2);
@@ -183,7 +177,6 @@ export default function App() {
     }
     // Step 3: Follow up chat AND Intent Switching
     else if (step === 3) {
-        // 0. SPECIAL CHECK: RAG / DOCUMENT QUERY
         const insuranceKeywords = /cobertura|seguro|cubre|deducible|pago|costo|plan|rimac|pacifico|mapfre/i;
         if (insuranceKeywords.test(text)) {
              try {
@@ -197,7 +190,6 @@ export default function App() {
              }
         }
 
-        // 1. Check for intent change
         const detectedIntent = await classifyUserIntent(text);
         if (sessionRef.current !== currentSession) return;
 
@@ -231,7 +223,6 @@ export default function App() {
              }
         }
 
-        // 2. Standard Follow-up
         try {
              const history = [
                  ...messages.map(m => ({
@@ -312,10 +303,9 @@ export default function App() {
         if (sessionRef.current !== currentSession) return;
         setIsRequestingLocation(false);
         let errorMessage = "No pude obtener tu ubicación. Por favor selecciona manualmente.";
-        // error.code 1 is PERMISSION_DENIED
         if (error.code === 1) {
             errorMessage = "⚠️ Permiso de ubicación denegado. Selecciona tu ubicación manualmente.";
-        } else if (error.code === 3) { // TIMEOUT
+        } else if (error.code === 3) {
             errorMessage = "⌛ Se agotó el tiempo de espera. Intenta de nuevo o selecciona manualmente.";
         }
         addMessage(errorMessage, 'ai');
@@ -389,7 +379,12 @@ export default function App() {
       setIsTyping(true);
 
       try {
-          const result = await analyzeSymptoms(symptomsOrMed);
+          // 🔥 USE NEW RAG SERVICE
+          const result = await analyzeSymptomsWithRAG(symptomsOrMed, {
+            district: district,
+            insurance: ins
+          });
+
           if (sessionRef.current !== currentSession) return;
 
           setAnalysis(result);
@@ -397,7 +392,14 @@ export default function App() {
           setTimeout(() => {
             if (sessionRef.current !== currentSession) return;
             setIsTyping(false);
-            addMessage("He analizado tus síntomas. Revisa la pestaña de Análisis y Resultados.", 'ai');
+            
+            const hasRAGResults = result.recommendedCenters && result.recommendedCenters.length > 0;
+            if (hasRAGResults) {
+                addMessage(`He analizado tus síntomas. Encontré ${result.recommendedCenters.length} opciones verificadas en mis documentos que aceptan ${ins}. Revisa la pestaña de Resultados.`, 'ai');
+            } else {
+                addMessage("He analizado tus síntomas. No encontré centros específicos en mis documentos para esa zona, pero te muestro opciones generales del directorio.", 'ai');
+            }
+
             setStep(3);
             setMobileTab('results'); 
           }, 1000);
@@ -426,7 +428,6 @@ export default function App() {
       setSelectedCenter(null);
       setMobileTab('chat');
       setIsTyping(false); 
-      // Optional: Don't show welcome screen again on reset for better UX
   };
 
   const hasAnalysis = !!analysis;
@@ -435,12 +436,10 @@ export default function App() {
   return (
     <div className="h-full w-full overflow-hidden flex flex-col md:items-center md:justify-center md:p-8 relative">
        
-       {/* GLOBAL BACKGROUND: Unified background for the whole app */}
+       {/* GLOBAL BACKGROUND */}
        <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none bg-slate-50">
-          {/* Animated Blobs */}
           <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] md:w-[500px] md:h-[500px] bg-blue-200/40 md:bg-blue-100/50 rounded-full blur-[80px] md:blur-3xl animate-blob"></div>
           
-          {/* Decorative Background Logo (Global) - Positioned bottom right */}
           <div className="absolute bottom-[-50px] right-[-50px] md:bottom-[-80px] md:right-[-80px] opacity-10 md:opacity-20 transform rotate-[-15deg] scale-150">
              <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <defs>
@@ -460,7 +459,6 @@ export default function App() {
           </div>
        </div>
 
-       {/* Mobile Welcome Overlay */}
        <MobileWelcome 
             isVisible={showMobileWelcome} 
             onStart={() => setShowMobileWelcome(false)} 
@@ -468,10 +466,7 @@ export default function App() {
             canInstall={!!deferredPrompt}
        />
 
-       {/* MAIN CONTAINER */}
        <main className="w-full h-full md:max-w-7xl md:h-[75vh] relative z-10">
-          
-          {/* DESKTOP LAYOUT */}
           <div className="hidden lg:grid grid-cols-12 gap-6 h-full">
              <ChatPanel 
                  messages={messages} 
@@ -504,16 +499,15 @@ export default function App() {
                              userInsurance={insurance}
                              flow={flow}
                              query={symptomsOrMed}
+                             analysis={analysis}
                          />
                      </div>
                  </>
              )}
           </div>
 
-          {/* MOBILE LAYOUT: FLEX COLUMN to stack NavBar at bottom */}
+          {/* MOBILE LAYOUT */}
           <div className="lg:hidden h-full w-full flex flex-col">
-              
-              {/* Content Area: Takes remaining space (flex-1) */}
               <div className="flex-1 relative overflow-hidden w-full">
                   <div className={`absolute inset-0 transition-opacity duration-300 bg-slate-50/50 ${mobileTab === 'chat' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
                        <ChatPanel 
@@ -550,12 +544,12 @@ export default function App() {
                                 userInsurance={insurance}
                                 flow={flow}
                                 query={symptomsOrMed}
+                                analysis={analysis}
                             />
                        </div>
                   )}
               </div>
 
-              {/* Navigation Bar: Stacks at the bottom naturally */}
               <MobileNavBar 
                 activeTab={mobileTab} 
                 setActiveTab={setMobileTab} 
@@ -568,7 +562,6 @@ export default function App() {
               center={selectedCenter} 
               onClose={() => setSelectedCenter(null)} 
           />
-
        </main>
     </div>
   );

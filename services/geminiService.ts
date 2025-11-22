@@ -1,15 +1,11 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { TriageAnalysis, UrgencyLevel } from '../types';
+import { TriageAnalysis, UrgencyLevel, TriageAnalysisWithCenters } from '../types';
 
 // Initialize Gemini AI
-// NOTE: For Vertex AI Search grounding to work with private data, 
-// you often need to use the Vertex AI endpoint or a backend proxy.
-// This code assumes the SDK usage pattern for Retrieval tools.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // --- CONFIGURACIÓN VERTEX AI SEARCH (RAG) ---
-// Credenciales actualizadas para Doctoi Vertex AI
 const VERTEX_PROJECT_ID = "milumon-portfolio"; 
 const VERTEX_LOCATION = "global"; 
 const VERTEX_DATA_STORE_ID = "doctoi-datastore"; 
@@ -40,6 +36,7 @@ const triageSchema: Schema = {
   required: ["specialty", "specialtyDescription", "urgency", "urgencyExplanation", "detectedSymptoms", "advice", "confidence"]
 };
 
+// Legacy simple analysis (kept for fallback or simple flows)
 export const analyzeSymptoms = async (symptoms: string): Promise<TriageAnalysis> => {
   try {
     const response = await ai.models.generateContent({
@@ -61,7 +58,6 @@ export const analyzeSymptoms = async (symptoms: string): Promise<TriageAnalysis>
 
   } catch (error) {
     console.error("Gemini analysis failed:", error);
-    // Fallback in case of API failure (should not happen in happy path)
     return {
       specialty: "Medicina General",
       specialtyDescription: "Análisis automático no disponible. Se recomienda evaluación general.",
@@ -74,7 +70,117 @@ export const analyzeSymptoms = async (symptoms: string): Promise<TriageAnalysis>
   }
 };
 
-// Changed parts type from tuple [{text: string}] to array {text: string}[] to match App.tsx usage
+// --- NUEVA FUNCIÓN RAG (Conectada a Vertex AI Search) ---
+export const analyzeSymptomsWithRAG = async (
+  symptoms: string,
+  userContext: { district: string; insurance: string }
+): Promise<TriageAnalysisWithCenters> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `Eres un asistente de triaje médico en Perú.
+
+CONTEXTO DEL PACIENTE:
+- Síntomas: "${symptoms}"
+- Ubicación: ${userContext.district}
+- Seguro: ${userContext.insurance}
+
+INSTRUCCIONES:
+1. Analiza los síntomas y determina la especialidad médica necesaria
+2. Evalúa el nivel de urgencia (low, moderate, high, emergency)
+3. Busca en los documentos los centros de salud que:
+   - Tengan la especialidad necesaria
+   - Acepten el seguro "${userContext.insurance}"
+   - Estén cerca de "${userContext.district}" o atiendan esa zona
+4. Si el seguro es EsSalud o SIS, prioriza centros públicos
+5. Si es seguro privado, busca clínicas con convenio
+
+IMPORTANTE:
+- Solo recomienda centros que EXISTAN en los documentos
+- Incluye teléfono, dirección y horarios SI están en los documentos
+- Si no encuentras información, dilo honestamente
+- Si es EMERGENCIA, indica el número 106 (SAMU)
+
+Responde en JSON estrictamente con este formato:
+{
+  "specialty": "nombre de la especialidad",
+  "specialtyDescription": "por qué se necesita esta especialidad",
+  "urgency": "Baja|Moderada|Alta|Emergencia",
+  "urgencyExplanation": "explicación del nivel de urgencia",
+  "detectedSymptoms": ["síntoma1", "síntoma2"],
+  "recommendedCenters": [
+    {
+      "name": "nombre del centro (de los documentos)",
+      "type": "Clínica|Hospital|Centro de Salud",
+      "address": "dirección (de los documentos)",
+      "district": "distrito",
+      "phone": "teléfono (si está disponible)",
+      "acceptsInsurance": true,
+      "hasSpecialty": true,
+      "operatingHours": "horario (si está disponible)",
+      "reason": "por qué se recomienda este centro"
+    }
+  ],
+  "insuranceCoverage": {
+    "covers": true|false,
+    "details": "qué cubre el seguro para este caso (de los documentos)",
+    "copayEstimate": "estimación de copago si está disponible",
+    "requirements": ["DNI", "Carnet de seguro", etc.]
+  },
+  "advice": ["consejo1", "consejo2"],
+  "emergencyAction": null,
+  "confidence": 85,
+  "sourcesUsed": ["nombre del documento 1"]
+}`,
+      config: {
+        responseMimeType: "application/json",
+        tools: [{
+          retrieval: {
+            vertexAiSearch: {
+              datastore: `projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/collections/default_collection/dataStores/${VERTEX_DATA_STORE_ID}`
+            }
+          }
+        }],
+        systemInstruction: `Eres un asistente médico experto en el sistema de salud peruano.
+        
+REGLAS ESTRICTAS:
+- SOLO recomienda centros que encuentres en los documentos proporcionados (Grounding).
+- NUNCA inventes nombres de clínicas, direcciones o teléfonos.
+- Si no encuentras información específica en los documentos, indica que no se encontró.
+- Prioriza la seguridad del paciente.
+- Para síntomas graves (dolor de pecho, dificultad respiratoria, sangrado severo), SIEMPRE marca como EMERGENCY`
+      }
+    });
+
+    if (response.text) {
+      // Remove potential markdown blocks if raw text is returned with ```json
+      const cleanText = response.text.replace(/```json|```/g, '').trim();
+      return JSON.parse(cleanText) as TriageAnalysisWithCenters;
+    }
+    throw new Error("No response from Gemini RAG");
+
+  } catch (error) {
+    console.error("Triage with RAG failed:", error);
+    // Fallback honesto
+    return {
+      specialty: "Medicina General",
+      specialtyDescription: "Se recomienda evaluación inicial",
+      urgency: UrgencyLevel.MODERATE,
+      urgencyExplanation: "No se pudo analizar completamente con los documentos. Se recomienda consulta presencial.",
+      detectedSymptoms: [symptoms],
+      recommendedCenters: [], // Empty indicates we fall back to standard directory
+      insuranceCoverage: {
+        covers: null,
+        details: "No se pudo verificar cobertura en los documentos. Contacte a su aseguradora.",
+        requirements: ["DNI", "Carnet de seguro"]
+      },
+      advice: ["Acudir al centro de salud más cercano"],
+      confidence: 0,
+      sourcesUsed: []
+    };
+  }
+};
+
 export const generateFollowUp = async (history: {role: string, parts: {text: string}[]}[]): Promise<string> => {
     try {
         const response = await ai.models.generateContent({
@@ -90,16 +196,13 @@ export const generateFollowUp = async (history: {role: string, parts: {text: str
     }
 }
 
-// Función RAG para consultar PDFs de seguros
 export const consultMedicalDocuments = async (query: string): Promise<string> => {
     try {
-        // Esta función utiliza 'Grounding' con Vertex AI Search
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash", 
             contents: `Answer the user's question about medical insurance coverage or clinic details based strictly on the provided context/documents.
             User Query: "${query}"`,
             config: {
-                // Definimos la herramienta de recuperación (Retrieval)
                 tools: [{
                     retrieval: {
                         vertexAiSearch: {
@@ -110,17 +213,13 @@ export const consultMedicalDocuments = async (query: string): Promise<string> =>
             }
         });
 
-        // Cuando se usa Grounding, la respuesta suele venir en texto plano con citas
-        // Si no hay info en los documentos, Gemini dirá que no lo sabe (evita alucinaciones)
         return response.text || "No encontré esa información específica en los documentos de las aseguradoras.";
     } catch (e) {
         console.error("Error consultando documentos (RAG):", e);
-        // Fallback silencioso a una respuesta genérica si RAG no está configurado aún
-        return "Lo siento, en este momento no puedo acceder a los detalles específicos de las pólizas. Por favor contacta a la clínica directamente.";
+        return "Lo siento, en este momento no puedo acceder a los detalles específicos de las pólizas.";
     }
 }
 
-// Intent Classification
 export const classifyUserIntent = async (text: string): Promise<'triage' | 'pharmacy' | 'directory'> => {
     try {
         const response = await ai.models.generateContent({
