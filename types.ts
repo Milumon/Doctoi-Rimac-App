@@ -43,38 +43,6 @@ export interface MedicalCenter {
   website?: string;
 }
 
-// --- RAG TYPES (New) ---
-
-export interface RecommendedCenter {
-  name: string;
-  type: string;
-  address?: string;
-  district?: string;
-  phone?: string;
-  acceptsInsurance: boolean;
-  hasSpecialty: boolean;
-  operatingHours?: string;
-  reason: string;
-}
-
-export interface InsuranceCoverage {
-  covers: boolean | null;
-  details: string;
-  copayEstimate?: string;
-  requirements: string[];
-}
-
-export interface TriageAnalysisWithCenters extends TriageAnalysis {
-  recommendedCenters: RecommendedCenter[];
-  insuranceCoverage: InsuranceCoverage;
-  emergencyAction?: {
-    isEmergency: boolean;
-    callNumber: string;
-    instruction: string;
-  };
-  sourcesUsed: string[];
-}
-
 export const INSURANCES = [
   "Rímac EPS",
   "Pacífico",
