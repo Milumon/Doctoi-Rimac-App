@@ -1,20 +1,37 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Doctoi Frontend
 
-# Run and deploy your AI Studio app
+Este es el frontend de Doctoi (React + Tailwind).
 
-This contains everything you need to run your app locally.
+## 🚀 Conexión con Backend (Nuevo)
 
-View your app in AI Studio: https://ai.studio/apps/drive/1O6roHnJCgx693yrSvtX2tr9RT4kRPu6b
+La aplicación ha sido refactorizada para no llamar a Gemini AI directamente desde el navegador. Ahora espera una API REST en la dirección `/api` (o la que configures).
 
-## Run Locally
+### 1. Configuración
+Crea un archivo `.env` o configura la variable de entorno en tu plataforma de despliegue (Vercel, Netlify):
 
-**Prerequisites:**  Node.js
+```bash
+REACT_APP_API_URL=https://tu-backend-api.com/api
+# Si estás en local, por defecto usa: /api (proxy) o http://localhost:3000/api
+```
 
+### 2. Endpoints Requeridos
+Tu backend debe implementar las siguientes rutas (POST):
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1.  **POST `/classify`**
+    *   Body: `{ text: string }`
+    *   Response: `{ intent: 'triage' | 'pharmacy' | 'directory' }`
+
+2.  **POST `/triage`**
+    *   Body: `{ symptoms: string, userContext: { district: string, insurance: string } }`
+    *   Response: Objeto JSON `TriageAnalysisWithCenters` (ver `types.ts`).
+
+3.  **POST `/chat`**
+    *   Body: `{ history: Array }`
+    *   Response: `{ text: string }`
+
+4.  **POST `/documents`**
+    *   Body: `{ query: string }`
+    *   Response: `{ text: string }`
+
+### 3. Migración de Lógica
+La lógica original de IA se encuentra comentada en `services/geminiService.ts`. Úsala como base para programar tus Lambda Functions o rutas de Express/FastAPI.

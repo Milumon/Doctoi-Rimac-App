@@ -10,7 +10,8 @@ import { MobileWelcome } from './components/MobileWelcome';
 import { Message, TriageAnalysisWithCenters, MedicalCenter } from './types';
 import { medicalCenters } from './data/centers';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
-import { analyzeSymptomsWithRAG, generateFollowUp, classifyUserIntent, consultMedicalDocuments } from './services/geminiService';
+// CHANGED: Imported from apiService instead of geminiService
+import { analyzeSymptomsWithRAG, generateFollowUp, classifyUserIntent, consultMedicalDocuments } from './services/apiService';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
@@ -379,7 +380,7 @@ export default function App() {
       setIsTyping(true);
 
       try {
-          // 🔥 USE NEW RAG SERVICE
+          // 🔥 USE NEW API SERVICE
           const result = await analyzeSymptomsWithRAG(symptomsOrMed, {
             district: district,
             insurance: ins
@@ -396,6 +397,8 @@ export default function App() {
             const hasRAGResults = result.recommendedCenters && result.recommendedCenters.length > 0;
             if (hasRAGResults) {
                 addMessage(`He analizado tus síntomas con base en las Guías MINSA. Encontré ${result.recommendedCenters.length} opciones verificadas que aceptan ${ins}. Revisa la pestaña de Resultados.`, 'ai');
+            } else if (result.specialty === "Error de Conexión") {
+                addMessage("Lo siento, no pude conectar con el servidor central. Intenta nuevamente más tarde.", 'ai');
             } else {
                 addMessage("He analizado tus síntomas. No encontré centros específicos en mis documentos oficiales para esa zona, pero te muestro opciones generales del directorio.", 'ai');
             }
