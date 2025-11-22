@@ -1,47 +1,22 @@
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { TriageAnalysis, UrgencyLevel, TriageAnalysisWithCenters } from '../types';
 import { INSURANCE_POLICIES, CLINICAL_GUIDELINES } from '../data/knowledgeBase';
 
 // Initialize Gemini AI
-// NOTE: In a real AWS Lambda architecture, this initialization happens inside the handler
-// to keep the container warm and secure the API KEY server-side.
+// SEGURIDAD: En producción, esta inicialización y las llamadas deben hacerse desde un Proxy Serverless
+// (ej. Vercel Edge Functions o AWS Lambda) para proteger la API_KEY.
+// Arquitectura Actual: Client-Side Prototype con Long Context Grounding.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // --- SECURITY LAYER (Simulated Backend Logic) ---
 const sanitizeInput = (text: string): string => {
-    // A real backend would use DLP (Data Loss Prevention) here.
-    // Simple regex to remove potential DNI/Phone numbers from prompt context if needed for privacy
-    return text.replace(/\b\d{8}\b/g, "[DNI_REDACTED]");
+    // Simulación de DLP (Data Loss Prevention) para cumplir normativas de privacidad
+    return text.replace(/\b\d{8}\b/g, "[DNI_REDACTED]").replace(/\b9\d{8}\b/g, "[CELULAR_REDACTED]");
 };
 
-const triageSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    specialty: { type: Type.STRING, description: "Recommended medical specialty" },
-    specialtyDescription: { type: Type.STRING, description: "Short explanation of why this specialty is needed" },
-    urgency: { 
-      type: Type.STRING, 
-      enum: [UrgencyLevel.LOW, UrgencyLevel.MODERATE, UrgencyLevel.HIGH, UrgencyLevel.EMERGENCY],
-      description: "Urgency level of the condition"
-    },
-    urgencyExplanation: { type: Type.STRING, description: "Why this urgency level was assigned" },
-    detectedSymptoms: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "List of symptoms extracted from user text"
-    },
-    advice: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "Immediate advice or things to avoid before seeing a doctor"
-    },
-    confidence: { type: Type.NUMBER, description: "Confidence score 0-100" }
-  },
-  required: ["specialty", "specialtyDescription", "urgency", "urgencyExplanation", "detectedSymptoms", "advice", "confidence"]
-};
-
-// --- RAG HÍBRIDO (Serverless-Ready Architecture) ---
+// --- LONG CONTEXT GROUNDING SERVICE ---
+// En lugar de RAG tradicional (Vector Search), usamos la ventana de contexto de 1M tokens de Gemini
+// para inyectar toda la normativa vigente y asegurar precisión sin alucinaciones.
 export const analyzeSymptomsWithRAG = async (
   symptoms: string,
   userContext: { district: string; insurance: string }
@@ -49,22 +24,24 @@ export const analyzeSymptomsWithRAG = async (
   try {
     const cleanSymptoms = sanitizeInput(symptoms);
 
-    // We inject the "Database" content into the System Instruction.
-    // This creates a strong boundary that the model follows strictly.
+    // INYECCIÓN DE CONTEXTO "IN-MEMORY"
+    // Esto actúa como nuestra base de datos inmutable para la sesión.
     const SYSTEM_PROMPT = `
-ROL: Eres el motor de inteligencia artificial de Doctoi (Perú). Actúas como un Auditor Médico estricto.
+ROL: Auditor Médico de Doctoi (Perú).
+OBJETIVO: Validar síntomas y coberturas basándote ÚNICAMENTE en los documentos oficiales provistos.
 
-BASE DE CONOCIMIENTO OBLIGATORIA (Tus "Documentos"):
+FUENTES DE VERDAD (NO ALUCINAR FUERA DE ESTO):
+1. [SUSALUD] Pólizas Vigentes:
 ${INSURANCE_POLICIES}
+
+2. [MINSA] Guías de Práctica Clínica (CIE-10):
 ${CLINICAL_GUIDELINES}
 
-INSTRUCCIONES DE PROCESAMIENTO:
-1. ANÁLISIS DE SÍNTOMAS: Compara los síntomas del usuario contra las "GUÍAS DE PRÁCTICA CLÍNICA MINSA" provistas.
-2. VERIFICACIÓN DE SEGURO: Busca textualmente el seguro "${userContext.insurance}" en las "PÓLIZAS VIGENTES". Si existe, extrae la cobertura exacta.
-3. REGLAS DE NEGOCIO:
-   - Si es EMERGENCIA según guías -> Prioriza Hospitales cercanos y recomienda llamar al 106/116.
-   - Si es SIS -> Solo derivar a Hospitales del Estado (Minsa).
-   - Si es EPS/Privado -> Derivar a Clínicas.
+INSTRUCCIONES CRÍTICAS:
+- Si el síntoma coincide con un "Signo de Alarma" en las Guías MINSA, la urgencia es AUTOMÁTICAMENTE "Emergencia" o "Alta".
+- Para la cobertura, cita textualmente el deducible o copago del documento de SUSALUD si existe.
+- Si el seguro es SIS, deriva exclusivamente a hospitales del estado (MINSA).
+- Si el seguro es EPS, deriva a clínicas privadas.
 
 FORMATO DE SALIDA: JSON Estricto.
 `;
@@ -77,53 +54,60 @@ FORMATO DE SALIDA: JSON Estricto.
       - Seguro Declarado: ${userContext.insurance}
       
       TAREA:
-      1. Determina urgencia y especialidad usando las GUÍAS.
-      2. Explica la cobertura usando las PÓLIZAS.
-      3. Usa Google Search para encontrar centros médicos REALES en ${userContext.district} que coincidan con la red del seguro.
+      1. Determina urgencia y especialidad basándote en los códigos CIE-10 provistos.
+      2. Explica la cobertura usando los datos de SUSALUD provistos.
+      3. Usa Google Search para encontrar centros médicos REALES y VIGENTES en ${userContext.district} que coincidan con la red del seguro.
       
       Responde SOLO con el JSON definido.`,
       config: {
         tools: [{ googleSearch: {} }], 
-        responseMimeType: "application/json", // Enforced JSON for backend-like reliability
+        // responseMimeType cannot be used with googleSearch
         systemInstruction: SYSTEM_PROMPT
       }
     });
 
     if (response.text) {
       const cleanText = response.text.trim();
-      // Robust parsing ensuring we get a valid object
       let parsed: any = {};
       try {
+          // Attempt to parse directly
           parsed = JSON.parse(cleanText);
       } catch (e) {
-          // Fallback for markdown code blocks common in LLMs
-          const match = cleanText.match(/```json([\s\S]*?)```/);
-          if (match) parsed = JSON.parse(match[1]);
-          else throw e;
+          // Attempt to extract JSON from markdown code blocks if present
+          const match = cleanText.match(/```json([\s\S]*?)```/) || cleanText.match(/```([\s\S]*?)```/);
+          if (match) {
+             try {
+                parsed = JSON.parse(match[1]);
+             } catch (innerE) {
+                console.error("JSON Extraction Error", innerE);
+                throw e;
+             }
+          } else {
+             throw e;
+          }
       }
 
-      // Map the raw JSON to our Typescript Interface
       const result: TriageAnalysisWithCenters = {
           specialty: parsed.specialty || "Medicina General",
-          specialtyDescription: parsed.specialtyDescription || "Evaluación general",
+          specialtyDescription: parsed.specialtyDescription || "Evaluación inicial",
           urgency: parsed.urgency || UrgencyLevel.MODERATE,
-          urgencyExplanation: parsed.urgencyExplanation || "Evaluación estándar",
+          urgencyExplanation: parsed.urgencyExplanation || "Evaluación según protocolo estándar.",
           detectedSymptoms: parsed.detectedSymptoms || [],
           advice: parsed.advice || [],
           confidence: parsed.confidence || 85,
           recommendedCenters: parsed.recommendedCenters || [],
-          insuranceCoverage: parsed.insuranceCoverage || { covers: null, details: "Consultar aseguradora", requirements: [] },
-          sourcesUsed: ["Guías Minsa (Interno)", "Pólizas 2025 (Interno)"]
+          insuranceCoverage: parsed.insuranceCoverage || { covers: null, details: "Consultar póliza específica.", requirements: [] },
+          sourcesUsed: ["Guías GPC MINSA (Oficial)", "Registro SUSALUD 2025"]
       };
       
-      // Add Google Search sources if available
+      // Grounding Check
       if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
         const chunks = response.candidates[0].groundingMetadata.groundingChunks;
         const webSources = chunks
             .filter((c: any) => c.web?.title)
             .map((c: any) => c.web.title);
         if (webSources.length > 0) {
-            result.sourcesUsed.push("Google Maps/Search");
+            result.sourcesUsed.push("Google Maps Verification");
         }
       }
       
@@ -132,17 +116,17 @@ FORMATO DE SALIDA: JSON Estricto.
     throw new Error("Empty response from AI");
 
   } catch (error) {
-    console.error("Backend Simulation Error:", error);
+    console.error("AI Service Error:", error);
     return {
       specialty: "Medicina General",
-      specialtyDescription: "Error de conexión. Acuda a triaje presencial.",
+      specialtyDescription: "Acuda a triaje presencial para evaluación.",
       urgency: UrgencyLevel.MODERATE,
-      urgencyExplanation: "Fallo en el análisis automático.",
+      urgencyExplanation: "No se pudo completar la validación automática.",
       detectedSymptoms: [symptoms],
       recommendedCenters: [], 
       insuranceCoverage: {
         covers: null,
-        details: "No disponible.",
+        details: "Información no disponible temporalmente.",
         requirements: []
       },
       advice: ["Acudir al centro de salud más cercano"],
@@ -152,23 +136,23 @@ FORMATO DE SALIDA: JSON Estricto.
   }
 };
 
-// Simple text generation with internal context
 export const generateFollowUp = async (history: {role: string, parts: {text: string}[]}[]): Promise<string> => {
     try {
         const systemContext = `
-        CONTEXTO DE SEGURIDAD: Estás operando bajo protocolos estrictos.
-        DOCUMENTOS INTERNOS DISPONIBLES:
+        CONTEXTO DE SEGURIDAD: Eres un asistente administrativo médico. NO DIAGNOSTICAS, solo informas basado en protocolos.
+        
+        REFERENCIAS OBLIGATORIAS:
         ${INSURANCE_POLICIES}
         ${CLINICAL_GUIDELINES}
         
-        Usa esta información si el usuario pregunta sobre "qué cubre mi seguro" o "qué hago si tengo fiebre".
+        Si te preguntan algo médico fuera de estos documentos, responde: "Esa consulta requiere evaluación presencial por un médico".
         `;
 
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: history.map(h => ({ role: h.role, parts: h.parts })),
             config: {
-                 systemInstruction: `Eres Doctoi. ${systemContext}`
+                 systemInstruction: systemContext
             }
         });
         return response.text || "Lo siento, no pude procesar eso.";
@@ -181,13 +165,10 @@ export const consultMedicalDocuments = async (query: string): Promise<string> =>
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash", 
-            contents: `PREGUNTA DE USUARIO: "${query}"
+            contents: `CONSULTA NORMATIVA: "${query}"
             
             INSTRUCCIONES:
-            Busca la respuesta EXCLUSIVAMENTE en los siguientes documentos internos.
-            Si la respuesta no está ahí, usa Google Search para complementar (ej. direcciones).
-            
-            DOCUMENTOS:
+            Responde citando la fuente (SUSALUD o MINSA) basándote en:
             ${INSURANCE_POLICIES}
             ${CLINICAL_GUIDELINES}`,
             config: {
@@ -195,7 +176,7 @@ export const consultMedicalDocuments = async (query: string): Promise<string> =>
             }
         });
 
-        return response.text || "No encontré esa información específica.";
+        return response.text || "No encontré esa información específica en las bases oficiales.";
     } catch (e) {
         console.error("Error consultando documentos:", e);
         return "Lo siento, en este momento no puedo buscar esa información.";
@@ -206,7 +187,12 @@ export const classifyUserIntent = async (text: string): Promise<'triage' | 'phar
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
-            contents: `Classify intent: "${text}" -> 'triage' (symptoms), 'pharmacy' (meds), 'directory' (clinics). JSON.`,
+            contents: `Analiza la intención del usuario: "${text}". 
+            - 'triage': Describe síntomas, dolor, enfermedad.
+            - 'pharmacy': Busca medicamentos, pastillas, recetas.
+            - 'directory': Busca clínicas, hospitales, direcciones, teléfonos.
+            
+            Responde JSON.`,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {

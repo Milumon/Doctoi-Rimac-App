@@ -395,9 +395,9 @@ export default function App() {
             
             const hasRAGResults = result.recommendedCenters && result.recommendedCenters.length > 0;
             if (hasRAGResults) {
-                addMessage(`He analizado tus síntomas. Encontré ${result.recommendedCenters.length} opciones verificadas en mis documentos que aceptan ${ins}. Revisa la pestaña de Resultados.`, 'ai');
+                addMessage(`He analizado tus síntomas con base en las Guías MINSA. Encontré ${result.recommendedCenters.length} opciones verificadas que aceptan ${ins}. Revisa la pestaña de Resultados.`, 'ai');
             } else {
-                addMessage("He analizado tus síntomas. No encontré centros específicos en mis documentos para esa zona, pero te muestro opciones generales del directorio.", 'ai');
+                addMessage("He analizado tus síntomas. No encontré centros específicos en mis documentos oficiales para esa zona, pero te muestro opciones generales del directorio.", 'ai');
             }
 
             setStep(3);
@@ -466,7 +466,7 @@ export default function App() {
             canInstall={!!deferredPrompt}
        />
 
-       <main className="w-full h-full md:max-w-7xl md:h-[75vh] relative z-10">
+       <main className="w-full h-full md:max-w-7xl md:h-[75vh] relative z-10 flex flex-col md:block">
           <div className="hidden lg:grid grid-cols-12 gap-6 h-full">
              <ChatPanel 
                  messages={messages} 
@@ -507,8 +507,8 @@ export default function App() {
           </div>
 
           {/* MOBILE LAYOUT */}
-          <div className="lg:hidden h-full w-full flex flex-col">
-              <div className="flex-1 relative overflow-hidden w-full">
+          <div className="lg:hidden flex-1 w-full flex flex-col relative overflow-hidden">
+              <div className="flex-1 relative w-full">
                   <div className={`absolute inset-0 transition-opacity duration-300 bg-slate-50/50 ${mobileTab === 'chat' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
                        <ChatPanel 
                             messages={messages} 
@@ -549,20 +549,31 @@ export default function App() {
                        </div>
                   )}
               </div>
-
-              <MobileNavBar 
+          </div>
+          
+           {/* MOBILE NAVBAR */}
+           <div className="lg:hidden relative z-50">
+             <MobileNavBar 
                 activeTab={mobileTab} 
                 setActiveTab={setMobileTab} 
                 hasAnalysis={!!analysis && flow === 'triage'}
                 hasResults={step === 3}
               />
-          </div>
+           </div>
 
           <DetailModal 
               center={selectedCenter} 
               onClose={() => setSelectedCenter(null)} 
           />
        </main>
+
+       {/* DISCLAIMER BANNER - ADDRESSING ETHICAL FEEDBACK */}
+       <div className="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-md text-slate-300 px-4 py-2 z-[70] flex items-center justify-center gap-2 border-t border-slate-700 lg:rounded-t-2xl lg:mx-auto lg:max-w-2xl lg:bottom-4 lg:shadow-2xl">
+           <svg className="w-4 h-4 text-yellow-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+           <p className="text-[10px] md:text-xs font-medium text-center leading-tight">
+               <span className="font-bold text-white">PROTOTIPO:</span> Esta IA puede cometer errores. No reemplaza consejo médico profesional. En emergencias llama al <span className="text-white font-bold underline">116</span> (Bomberos) o <span className="text-white font-bold underline">106</span> (SAMU).
+           </p>
+       </div>
     </div>
   );
 }
