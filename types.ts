@@ -2,7 +2,7 @@
 export interface Message {
   id: string;
   text: string;
-  sender: 'user' | 'ai';
+  sender: 'user' | 'ai' | 'doctor';
   type?: 'text' | 'department_selector' | 'province_selector' | 'district_selector' | 'insurance_selector' | 'intent_selector';
 }
 
@@ -43,10 +43,35 @@ export interface MedicalCenter {
   website?: string;
 }
 
+export interface DoctorMencion {
+  registro: string;
+  tipo: string;
+  codigo: string;
+  fecha: string;
+}
+
+export interface Doctor {
+  cmp: string;
+  nombre_completo: string;
+  apellido_paterno: string;
+  apellido_materno: string;
+  nombres: string;
+  estado: string;
+  consejo_regional: string;
+  email: string | null;
+  foto_base64: string;
+  detalle_url: string;
+  menciones: DoctorMencion[];
+  scraped_contexts: string[];
+  tipos_registro: string[];
+  especialidades_registro: string[];
+  tipo_principal: string;
+  especialidad_principal: string;
+}
+
 export const INSURANCES = [
-  "Rímac EPS",
+  "Rímac",
   "Pacífico",
-  "Mapfre",
   "EsSalud",
   "SIS",
   "Particular",

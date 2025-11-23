@@ -4,6 +4,7 @@ import { TriageAnalysis, UrgencyLevel } from '../types';
 
 interface AnalysisPanelProps {
   analysis: TriageAnalysis;
+  onContactDoctor?: () => void;
 }
 
 const getUrgencyColors = (level: UrgencyLevel) => {
@@ -16,12 +17,13 @@ const getUrgencyColors = (level: UrgencyLevel) => {
     }
 }
 
-export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis }) => {
+export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, onContactDoctor }) => {
   const colors = getUrgencyColors(analysis.urgency);
 
   return (
     <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter">
-      <div className="px-6 py-5 border-b border-slate-50 bg-blue-50/30 flex justify-between items-center">
+      {/* Header */}
+      <div className="px-6 py-5 border-b border-slate-50 bg-blue-50/30 flex justify-between items-center shrink-0">
         <span className="text-sm font-bold text-blue-900 flex items-center gap-2">
           <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
           Análisis Clínico
@@ -29,7 +31,8 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis }) => {
         <span className="text-[10px] font-bold px-2 py-1 bg-blue-100 text-blue-700 rounded-full">{analysis.confidence}% Confianza</span>
       </div>
 
-      <div className="p-6 pb-4 overflow-y-auto space-y-6 no-scrollbar">
+      {/* Scrollable Content */}
+      <div className="p-6 overflow-y-auto space-y-6 no-scrollbar flex-1">
         {/* Specialty */}
         <div className="text-center mt-2">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg shadow-blue-200 mb-3 text-3xl">
@@ -77,6 +80,24 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis }) => {
           </ul>
         </div>
       </div>
+
+      {/* Sticky Footer Action */}
+      {onContactDoctor && (
+        <div className="p-4 bg-white border-t border-slate-50 shrink-0 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
+            <button 
+                onClick={onContactDoctor}
+                className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-200 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
+            >
+                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                </div>
+                <div className="flex flex-col items-start">
+                    <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Disponible ahora</span>
+                    <span className="text-base font-bold">Consultar Especialista</span>
+                </div>
+            </button>
+        </div>
+      )}
     </section>
   );
 };

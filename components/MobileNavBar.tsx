@@ -2,13 +2,14 @@
 import React from 'react';
 
 interface MobileNavBarProps {
-  activeTab: 'chat' | 'analysis' | 'results';
-  setActiveTab: (tab: 'chat' | 'analysis' | 'results') => void;
+  activeTab: 'chat' | 'analysis' | 'results' | 'doctor';
+  setActiveTab: (tab: 'chat' | 'analysis' | 'results' | 'doctor') => void;
   hasAnalysis: boolean;
   hasResults: boolean;
+  hasDoctor: boolean;
 }
 
-export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActiveTab, hasAnalysis, hasResults }) => {
+export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActiveTab, hasAnalysis, hasResults, hasDoctor }) => {
   return (
     <div className="lg:hidden w-full h-20 bg-white/95 backdrop-blur-xl rounded-t-[2rem] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] border-t border-slate-100 z-50 flex items-center justify-around px-2 flex-shrink-0">
       
@@ -45,6 +46,19 @@ export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActive
          </div>
         <span className="text-[10px] font-bold">Lugares</span>
       </button>
+
+      {hasDoctor && (
+        <button 
+            onClick={() => setActiveTab('doctor')}
+            className={`flex flex-col items-center justify-center w-16 h-full transition-all duration-300 ${activeTab === 'doctor' ? 'text-indigo-600 -translate-y-1' : 'text-slate-400 hover:text-slate-600'}`}
+        >
+            <div className={`p-1.5 rounded-xl mb-0.5 transition-colors ${activeTab === 'doctor' ? 'bg-indigo-100' : 'bg-transparent'} relative`}>
+                <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full animate-pulse"></div>
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+            </div>
+            <span className="text-[10px] font-bold text-indigo-600">Dr.</span>
+        </button>
+      )}
 
     </div>
   );

@@ -35,20 +35,19 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({ centers, onSelectCen
       }
 
       // 3. STANDARD LOCATION MATCH (For Triage and Pharmacy flows)
-      // If Directory flow has no query (shouldn't happen usually), fall back to district match
-      const normalizedUserLoc = userDistrict.toLowerCase();
-      const normalizedCenterDist = c.district.toLowerCase();
+      const normalizedUserLoc = userDistrict.toLowerCase().trim();
+      const normalizedCenterDist = c.district.toLowerCase().trim();
       
-      // Direct match or "Lima Hub" fallback for main Lima districts
-      const isLimaHub = ['san borja', 'surco', 'santiago de surco', 'miraflores', 'san isidro', 'la molina', 'lima', 'jesus maría', 'lince', 'magdalena', 'callao'].some(d => normalizedUserLoc.includes(d));
-      
+      // Strict filtering logic
       let locationMatch = false;
       
-      if (normalizedCenterDist.includes(normalizedUserLoc) || normalizedUserLoc.includes(normalizedCenterDist)) {
+      if (normalizedCenterDist === normalizedUserLoc) {
           locationMatch = true;
-      } else if (isLimaHub && ['San Borja', 'Santiago de Surco', 'Miraflores', 'San Isidro', 'La Molina', 'Lima Cercado', 'Jesus María', 'Callao'].includes(c.district)) {
-          locationMatch = true; 
-      } else if (c.district === 'Provincia' && !isLimaHub) {
+      } else if (normalizedCenterDist.includes(normalizedUserLoc) || normalizedUserLoc.includes(normalizedCenterDist)) {
+          // Fallback for partial matches (e.g. "Lima" vs "Lima Cercado")
+          locationMatch = true;
+      } else if (normalizedUserLoc === 'lima' && (normalizedCenterDist === 'lima cercado' || normalizedCenterDist === 'cercado de lima')) {
+          // Explicit handle for Lima generic
           locationMatch = true;
       }
 
@@ -73,8 +72,26 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({ centers, onSelectCen
       return b.rating - a.rating;
   });
 
-  // Fallback logic if no specific matches found
-  const displayCenters = filteredCenters.length > 0 ? filteredCenters : centers.slice(0, 4);
+  // Fallback logic: Only show "Recommended" nearby if STRICT filter found 0 results.
+  // This prevents "Lima" showing "San Borja" clinics unless absolutely necessary.
+  let displayCenters = filteredCenters;
+  let isFallback = false;
+
+  if (filteredCenters.length === 0 && flow !== 'directory') {
+      isFallback = true;
+      // Try to find neighbors if user is in a known hub, but label them as such
+      const normalizedUserLoc = userDistrict.toLowerCase().trim();
+      const isLimaHub = ['san borja', 'surco', 'santiago de surco', 'miraflores', 'san isidro', 'la molina', 'lima', 'jesus maría', 'lince', 'magdalena'].some(d => normalizedUserLoc.includes(d));
+      
+      if (isLimaHub) {
+           displayCenters = centers.filter(c => 
+                ['San Borja', 'Santiago de Surco', 'Miraflores', 'San Isidro', 'Jesús María', 'Lince', 'Lima'].includes(c.district) &&
+                c.type !== 'Farmacia' // Assuming triage fallback
+           ).slice(0, 4);
+      } else {
+           displayCenters = centers.slice(0, 4);
+      }
+  }
 
   const headerColor = flow === 'pharmacy' ? 'blue' : (flow === 'directory' ? 'indigo' : 'emerald');
   
@@ -84,7 +101,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({ centers, onSelectCen
   else title = `Recomendados (${userDistrict})`;
 
   return (
-    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden z-10 animate-fade-enter">
+    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl rounded-3xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden z-10 animate-fade-enter">
       <div className={`px-6 py-5 border-b border-slate-50 bg-${headerColor}-50/30 flex justify-between items-center`}>
         <span className={`text-sm font-bold text-${headerColor}-900 flex items-center gap-2`}>
           <svg className={`w-4 h-4 text-${headerColor}-600`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path></svg>
@@ -103,6 +120,13 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({ centers, onSelectCen
         {displayCenters.length === 0 && (
              <div className="text-center p-10 text-slate-400 text-sm">No se encontraron lugares exactos.</div>
         )}
+        
+        {isFallback && displayCenters.length > 0 && (
+             <div className="text-center px-4 py-2 text-xs text-amber-600 bg-amber-50 rounded-xl border border-amber-100 mb-2">
+                No encontramos centros exactos con tu seguro en <strong>{userDistrict}</strong>. Mostrando opciones cercanas:
+             </div>
+        )}
+
         {displayCenters.map((center) => (
             <div key={center.id} className="bg-white p-0 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all group overflow-hidden">
                 <div className="px-4 py-3 border-b border-slate-50 flex justify-between items-center">

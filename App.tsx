@@ -4,13 +4,15 @@ import { ChatPanel } from './components/ChatPanel';
 import { HeroSection } from './components/HeroSection';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { ResultsPanel } from './components/ResultsPanel';
+import { DoctorChatPanel } from './components/DoctorChatPanel';
 import { DetailModal } from './components/DetailModal';
 import { MobileNavBar } from './components/MobileNavBar';
-import { MobileWelcome } from './components/MobileWelcome'; // Import new component
-import { Message, TriageAnalysis, MedicalCenter } from './types';
+import { MobileWelcome } from './components/MobileWelcome'; 
+import { Message, TriageAnalysis, MedicalCenter, Doctor } from './types';
 import { medicalCenters } from './data/centers';
+import { doctors } from './data/doctors';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
-import { analyzeSymptoms, generateFollowUp, classifyUserIntent, consultMedicalDocuments } from './services/geminiService';
+import { analyzeSymptoms, generateFollowUp, classifyUserIntent, consultMedicalDocuments, generateDoctorResponse } from './services/geminiService';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
@@ -23,7 +25,7 @@ import { analyzeSymptoms, generateFollowUp, classifyUserIntent, consultMedicalDo
 // 3 = Results
 type Step = 0 | 1 | 1.1 | 1.2 | 1.3 | 1.5 | 2 | 3;
 type Flow = 'triage' | 'pharmacy' | 'directory' | null;
-type MobileTab = 'chat' | 'analysis' | 'results';
+type MobileTab = 'chat' | 'analysis' | 'results' | 'doctor';
 
 export default function App() {
   const [step, setStep] = useState<Step>(0);
@@ -35,6 +37,12 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [isRequestingLocation, setIsRequestingLocation] = useState(false);
   
+  // DOCTOR CHAT STATE
+  const [doctorMessages, setDoctorMessages] = useState<Message[]>([]);
+  const [isDoctorTyping, setIsDoctorTyping] = useState(false);
+  const [currentDoctor, setCurrentDoctor] = useState<Doctor | null>(null);
+  const [rightPanelMode, setRightPanelMode] = useState<'results' | 'doctor'>('results');
+
   // Session control to cancel pending async operations on reset
   const sessionRef = useRef(0);
   
@@ -82,6 +90,10 @@ export default function App() {
   const addMessage = (text: string, sender: 'user' | 'ai', type: Message['type'] = 'text') => {
     const safeText = typeof text === 'string' ? text : JSON.stringify(text);
     setMessages(prev => [...prev, { id: (Date.now() + Math.random()).toString(), text: safeText, sender, type }]);
+  };
+
+  const addDoctorMessage = (text: string, sender: 'user' | 'doctor') => {
+    setDoctorMessages(prev => [...prev, { id: (Date.now() + Math.random()).toString(), text, sender }]);
   };
 
   const handleSelectIntent = (selectedFlow: 'triage' | 'pharmacy' | 'directory') => {
@@ -254,6 +266,34 @@ export default function App() {
     }
   };
 
+  const handleDoctorSendMessage = async (text: string) => {
+      if (!currentDoctor) return;
+      const currentSession = sessionRef.current;
+      addDoctorMessage(text, 'user');
+      setIsDoctorTyping(true);
+
+      try {
+          const history = [
+              ...doctorMessages.map(m => ({
+                  role: m.sender === 'user' ? 'user' : 'model',
+                  parts: [{ text: m.text }]
+              })),
+              { role: 'user', parts: [{ text: text }] }
+          ];
+
+          const response = await generateDoctorResponse(history, currentDoctor, analysis);
+          
+          if (sessionRef.current !== currentSession) return;
+          setIsDoctorTyping(false);
+          addDoctorMessage(response, 'doctor');
+
+      } catch (e) {
+          if (sessionRef.current !== currentSession) return;
+          setIsDoctorTyping(false);
+          addDoctorMessage("Lo siento, se cortó la conexión. Intenta de nuevo.", 'doctor');
+      }
+  };
+
   const handleRequestLocation = () => {
     const currentSession = sessionRef.current;
 
@@ -408,6 +448,29 @@ export default function App() {
       }
   };
 
+  const handleContactDoctor = () => {
+      const currentSession = sessionRef.current;
+      if (!analysis) return;
+
+      // Set UI State
+      setMobileTab('doctor');
+      setRightPanelMode('doctor');
+      setIsDoctorTyping(true);
+
+      // Find the best doctor match
+      const bestMatch = doctors.find(d => d.especialidad_principal.toLowerCase().includes(analysis.specialty.toLowerCase())) || doctors[0];
+      
+      setCurrentDoctor(bestMatch);
+      setDoctorMessages([]); // Clear previous chats if any
+
+      setTimeout(() => {
+          if (sessionRef.current !== currentSession) return;
+          setIsDoctorTyping(false);
+          const doctorGreeting = `Hola, soy el Dr. ${bestMatch.apellido_paterno}. He revisado tu pre-diagnóstico de ${analysis.specialty}. Para brindarte una mejor orientación, ¿podrías decirme desde cuándo presentas estos síntomas?`;
+          addDoctorMessage(doctorGreeting, 'doctor');
+      }, 1500);
+  }
+
   const handleReset = () => {
       sessionRef.current += 1; 
       setStep(0);
@@ -425,12 +488,15 @@ export default function App() {
       setIsRequestingLocation(false);
       setSelectedCenter(null);
       setMobileTab('chat');
-      setIsTyping(false); 
-      // Optional: Don't show welcome screen again on reset for better UX
+      setIsTyping(false);
+      setCurrentDoctor(null);
+      setDoctorMessages([]);
+      setRightPanelMode('results');
   };
 
   const hasAnalysis = !!analysis;
   const hasResults = step === 3;
+  const hasDoctor = !!currentDoctor;
 
   return (
     <div className="h-full w-full overflow-hidden flex flex-col md:items-center md:justify-center md:p-8 relative">
@@ -495,16 +561,30 @@ export default function App() {
                  <HeroSection />
              ) : (
                  <>
-                     {flow === 'triage' && analysis && <AnalysisPanel analysis={analysis} />}
-                     <div className={`${(flow === 'pharmacy' || flow === 'directory') ? 'col-span-8' : 'col-span-4'} h-full overflow-hidden`}>
-                         <ResultsPanel 
-                             centers={medicalCenters} 
-                             onSelectCenter={setSelectedCenter} 
-                             userDistrict={district}
-                             userInsurance={insurance}
-                             flow={flow}
-                             query={symptomsOrMed}
-                         />
+                     {flow === 'triage' && analysis && <AnalysisPanel analysis={analysis} onContactDoctor={handleContactDoctor} />}
+                     
+                     {/* The Rightmost Panel switches between Results and Doctor Chat */}
+                     {/* REMOVED overflow-hidden to allow rings/shadows/rounded corners to show properly */}
+                     <div className={`${(flow === 'pharmacy' || flow === 'directory') ? 'col-span-8' : 'col-span-4'} h-full relative`}>
+                         {rightPanelMode === 'results' && (
+                             <ResultsPanel 
+                                centers={medicalCenters} 
+                                onSelectCenter={setSelectedCenter} 
+                                userDistrict={district}
+                                userInsurance={insurance}
+                                flow={flow}
+                                query={symptomsOrMed}
+                            />
+                         )}
+                         {rightPanelMode === 'doctor' && currentDoctor && (
+                             <DoctorChatPanel 
+                                doctor={currentDoctor}
+                                messages={doctorMessages}
+                                onSendMessage={handleDoctorSendMessage}
+                                onClose={() => setRightPanelMode('results')}
+                                isTyping={isDoctorTyping}
+                             />
+                         )}
                      </div>
                  </>
              )}
@@ -537,7 +617,7 @@ export default function App() {
 
                   {hasAnalysis && (
                       <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'analysis' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
-                          {analysis && <AnalysisPanel analysis={analysis} />}
+                          {analysis && <AnalysisPanel analysis={analysis} onContactDoctor={handleContactDoctor} />}
                       </div>
                   )}
 
@@ -553,6 +633,18 @@ export default function App() {
                             />
                        </div>
                   )}
+
+                  {hasDoctor && currentDoctor && (
+                        <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'doctor' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
+                            <DoctorChatPanel 
+                                doctor={currentDoctor}
+                                messages={doctorMessages}
+                                onSendMessage={handleDoctorSendMessage}
+                                onClose={() => setMobileTab('results')}
+                                isTyping={isDoctorTyping}
+                            />
+                        </div>
+                  )}
               </div>
 
               {/* Navigation Bar: Stacks at the bottom naturally */}
@@ -561,6 +653,7 @@ export default function App() {
                 setActiveTab={setMobileTab} 
                 hasAnalysis={!!analysis && flow === 'triage'}
                 hasResults={step === 3}
+                hasDoctor={hasDoctor}
               />
           </div>
 
