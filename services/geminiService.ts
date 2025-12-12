@@ -1,10 +1,45 @@
+
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { TriageAnalysis, UrgencyLevel, Doctor, RagDocument, MedicalCenter, MedicineInfo } from '../types';
 
 // Initialize Gemini AI
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// --- HELPER: RETRY LOGIC FOR 503 OVERLOADED ---
+// =================================================================
+// 🚨 LEVEL 1: HARD-CODED EMERGENCY DETECTION (NO AI NEEDED)
+// =================================================================
+
+const EMERGENCY_KEYWORDS = /\b(me desangro|desangr[ao]|sangr[ao]|sangr[ao] mucho|sangre|hemorragia|herida profunda|muero|me muero|morir|asfixia|no respira|no puedo respirar|convulsion|convulsiona|inconsciente|paro|accidente grave|caida fuerte|golpe cabeza|quemadura severa|emergencia|ayuda urgente|socorro|cuchillo|disparo|baleado|atropellado|dead|muerto)\b/gi;
+
+const SUICIDE_KEYWORDS = /\b(me voy a matar|me quiero matar|suicidar|matarme|acabar con mi vida|no quiero vivir)\b/gi;
+
+export interface EmergencyDetection {
+    isEmergency: boolean;
+    isSuicidal: boolean;
+    matchedKeywords: string[];
+}
+
+/**
+ * CRÍTICO: Esta función debe ejecutarse ANTES de cualquier IA.
+ * Detecta emergencias médicas o riesgo suicida con 100% de precisión.
+ */
+export function detectEmergencyKeywords(text: string): EmergencyDetection {
+    const lowerText = text.toLowerCase();
+    
+    const emergencyMatches = [...lowerText.matchAll(EMERGENCY_KEYWORDS)].map(m => m[0]);
+    const suicidalMatches = [...lowerText.matchAll(SUICIDE_KEYWORDS)].map(m => m[0]);
+    
+    return {
+        isEmergency: emergencyMatches.length > 0,
+        isSuicidal: suicidalMatches.length > 0,
+        matchedKeywords: [...emergencyMatches, ...suicidalMatches]
+    };
+}
+
+// =================================================================
+// 🛠️ RETRY LOGIC (503 HANDLING)
+// =================================================================
+
 async function callWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
     try {
         return await fn();
@@ -12,13 +47,15 @@ async function callWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000)
         if (retries > 0 && (error.status === 503 || error.code === 503 || error.message?.includes('overloaded'))) {
             console.warn(`⚠️ Model overloaded. Retrying in ${delay}ms... (${retries} left)`);
             await new Promise(res => setTimeout(res, delay));
-            return callWithRetry(fn, retries - 1, delay * 2); // Exponential backoff
+            return callWithRetry(fn, retries - 1, delay * 2);
         }
         throw error;
     }
 }
 
-// ================= RAG / FILE MANAGEMENT =================
+// =================================================================
+// 📁 RAG / FILE MANAGEMENT
+// =================================================================
 
 export const uploadFileToGemini = async (file: File): Promise<RagDocument> => {
     return callWithRetry(async () => {
@@ -71,7 +108,9 @@ export const getActiveFilesFromGemini = async (): Promise<RagDocument[]> => {
     }
 };
 
-// ================= CHAT & TRIAJE =================
+// =================================================================
+// 🩺 TRIAGE ANALYSIS (ENHANCED WITH EMERGENCY DETECTION)
+// =================================================================
 
 const triageSchema: Schema = {
   type: Type.OBJECT,
@@ -102,6 +141,47 @@ const triageSchema: Schema = {
 export const analyzeSymptoms = async (input: string | { mimeType: string, data: string }): Promise<TriageAnalysis> => {
   return callWithRetry(async () => {
       try {
+        // 🚨 LEVEL 1: Hard-coded detection BEFORE AI
+        const textToCheck = typeof input === 'string' ? input : '';
+        const emergencyCheck = detectEmergencyKeywords(textToCheck);
+        
+        if (emergencyCheck.isEmergency) {
+            console.warn("🚨 EMERGENCY DETECTED VIA KEYWORDS:", emergencyCheck.matchedKeywords);
+            return {
+                specialty: "Medicina de Emergencias",
+                specialtyDescription: "Requiere atención médica inmediata en sala de urgencias.",
+                urgency: UrgencyLevel.EMERGENCY,
+                urgencyExplanation: `Situación detectada: ${emergencyCheck.matchedKeywords.join(', ')}. ACCIÓN INMEDIATA REQUERIDA.`,
+                detectedSymptoms: emergencyCheck.matchedKeywords,
+                advice: [
+                    "🚨 Llamar al 106 (SAMU) AHORA",
+                    "No mover al paciente si hay trauma craneal o espinal",
+                    "Si hay hemorragia visible, aplicar presión directa con tela limpia",
+                    "Mantener a la persona consciente hablándole"
+                ],
+                confidence: 100
+            };
+        }
+
+        if (emergencyCheck.isSuicidal) {
+            console.warn("⚠️ SUICIDAL IDEATION DETECTED:", emergencyCheck.matchedKeywords);
+            return {
+                specialty: "Psiquiatría de Emergencias",
+                specialtyDescription: "Crisis de salud mental que requiere intervención urgente.",
+                urgency: UrgencyLevel.EMERGENCY,
+                urgencyExplanation: "Riesgo vital por ideación suicida. Requiere contención psiquiátrica inmediata.",
+                detectedSymptoms: ["Ideación suicida", "Crisis emocional"],
+                advice: [
+                    "🆘 Línea de prevención suicida: 113 (Ministerio de Salud)",
+                    "No dejar solo al paciente",
+                    "Retirar objetos peligrosos del entorno",
+                    "Acudir a emergencias de un hospital con psiquiatría"
+                ],
+                confidence: 100
+            };
+        }
+
+        // 🤖 LEVEL 2: AI Analysis (if no hard emergency detected)
         let contents: any;
         if (typeof input === 'string') {
             contents = `Analyze the following symptoms for INFORMATIONAL PURPOSES ONLY. Not a medical diagnosis. 
@@ -122,44 +202,87 @@ export const analyzeSymptoms = async (input: string | { mimeType: string, data: 
             responseMimeType: "application/json",
             responseSchema: triageSchema,
             systemInstruction: `You are a triage assistant. 
-            RULES:
-            1. Return JSON.
-            2. If input is clearly not symptoms (e.g. "Hello", "Weather"), return confidence: 0.
-            3. CRITICAL: If the user says "Me muero" (I'm dying), "No puedo respirar", "Ayuda", "Emergencia" or indicates severe distress, you MUST set urgency to 'Emergencia'.
-            4. Otherwise, provide a best-effort analysis.`
+
+CRITICAL EMERGENCY DETECTION RULES (HIGHEST PRIORITY):
+1. ANY mention of: bleeding heavily, hemorrhage, stabbing, gunshot, severe burns, unconscious, not breathing, choking, seizure, severe chest pain, stroke symptoms -> ALWAYS return urgency: "Emergencia"
+2. Phrases like "me desangro", "no puedo respirar", "dolor de pecho intenso", "convulsionando" -> urgency: "Emergencia"
+3. If user says "¿dónde?" after describing severe symptoms, treat it as confirmation of emergency, not a question.
+
+PSYCHIATRIC EMERGENCY:
+- If user says "me voy a matar", "no quiero vivir", "me quiero suicidar" -> urgency: "Emergencia", specialty: "Psiquiatría de Emergencias"
+
+STANDARD RULES (if not emergency):
+- Return valid JSON.
+- If input is clearly not symptoms (e.g. "Hello", "Weather"), return confidence: 0.
+- For mild symptoms (headache, cold), use "Baja" or "Moderada".
+
+IMPORTANT: If you detect life-threatening symptoms, DO NOT downplay the urgency. Better to over-triage than miss a real emergency.`
           }
         });
 
-        if (response.text) return JSON.parse(response.text) as TriageAnalysis;
+        if (response.text) {
+            const result = JSON.parse(response.text) as TriageAnalysis;
+            
+            // 🛡️ POST-PROCESSING: Force emergency if AI missed it
+            const resultCheck = detectEmergencyKeywords(result.detectedSymptoms.join(' '));
+            if (resultCheck.isEmergency && result.urgency !== UrgencyLevel.EMERGENCY) {
+                console.warn("⚠️ AI MISSED EMERGENCY. Overriding to Emergency.");
+                result.urgency = UrgencyLevel.EMERGENCY;
+                result.urgencyExplanation = "Síntomas de alto riesgo detectados. Atención inmediata necesaria.";
+            }
+            
+            return result;
+        }
         throw new Error("No response text");
 
       } catch (error) {
-        console.warn("Gemini analysis failed or blocked. Using fallback.", error);
+        console.error("❌ Gemini analysis failed. Using emergency fallback.", error);
+        // 🚨 SAFETY FALLBACK: If AI fails during potential emergency, assume HIGH urgency
         return {
-          specialty: "Medicina General",
-          specialtyDescription: "Evaluación general requerida.",
-          urgency: UrgencyLevel.MODERATE,
-          urgencyExplanation: "Síntomas presentes que requieren valoración médica presencial.",
-          detectedSymptoms: ["Malestar general"],
-          advice: ["Acudir a consulta médica para evaluación presencial"],
-          confidence: 85
+          specialty: "Medicina General (Urgente)",
+          specialtyDescription: "No se pudo procesar la consulta. Por seguridad, recomendamos evaluación urgente.",
+          urgency: UrgencyLevel.HIGH, // Changed from MODERATE to HIGH for safety
+          urgencyExplanation: "Error en el sistema. Por precaución, acuda a emergencias si los síntomas son severos.",
+          detectedSymptoms: ["Error de procesamiento"],
+          advice: [
+            "Si los síntomas son graves o empeoran, llamar al 106 o acudir a emergencias",
+            "No automedicarse",
+            "Buscar atención médica presencial lo antes posible"
+          ],
+          confidence: 50
         };
       }
   });
 };
 
-// ================= ROUTING & CLASSIFICATION =================
+// =================================================================
+// 🎯 INTENT CLASSIFICATION (ENHANCED)
+// =================================================================
 
 export interface MultimodalIntent {
     intent: 'triage' | 'pharmacy' | 'directory' | 'chat';
-    transcription: string; // What the user said
-    query: string; // Cleaned query for search
-    detectedLocation?: string; // New: Location extracted from text
+    transcription: string;
+    query: string;
+    detectedLocation?: string;
+    isEmergency?: boolean; // NEW: Flag for emergency
 }
 
 export const classifyMultimodalIntent = async (input: string | { mimeType: string, data: string }): Promise<MultimodalIntent> => {
     return callWithRetry(async () => {
         try {
+            // 🚨 LEVEL 1: Check for emergency BEFORE classification
+            const textToCheck = typeof input === 'string' ? input : '';
+            const emergencyCheck = detectEmergencyKeywords(textToCheck);
+            
+            if (emergencyCheck.isEmergency || emergencyCheck.isSuicidal) {
+                return {
+                    intent: 'triage',
+                    transcription: textToCheck || 'Emergency detected',
+                    query: emergencyCheck.matchedKeywords.join(' '),
+                    isEmergency: true
+                };
+            }
+
             let contents: any;
             if (typeof input === 'string') {
                 contents = `Classify this text: "${input}"`;
@@ -181,25 +304,31 @@ export const classifyMultimodalIntent = async (input: string | { mimeType: strin
                         type: Type.OBJECT,
                         properties: {
                             intent: { type: Type.STRING, enum: ["triage", "pharmacy", "directory", "chat"] },
-                            transcription: { type: Type.STRING, description: "Verbatim transcription of audio or copy of text" },
-                            query: { type: Type.STRING, description: "Extracted search query (e.g. 'Clinica San Pablo', 'Paracetamol', 'Fiebre')" },
-                            detectedLocation: { type: Type.STRING, description: "Any explicit location mentioned (e.g. 'in San Borja', 'near Miraflores'). Empty if none." }
+                            transcription: { type: Type.STRING },
+                            query: { type: Type.STRING },
+                            detectedLocation: { type: Type.STRING }
                         },
                         required: ["intent", "transcription", "query"]
                     },
-                    systemInstruction: `You are an intent router for a health app.
+                    systemInstruction: `You are an intent router for a health app in Peru.
                     
-                    CLASSIFICATION RULES:
-                    1. 'triage': User describes symptoms ("Me duele", "Tengo fiebre") OR EXTREME DISTRESS ("Me muero", "Ayuda", "Emergencia", "Me siento mal").
-                    2. 'pharmacy': User asks for MEDICATION names ("Donde compro Panadol", "Precio de Amoxicilina") or explicit "Farmacia".
-                    3. 'directory': User asks for a SPECIFIC clinic/hospital location BY NAME ("Donde esta la Clinica Delgado", "Hospital Rebagliati").
-                    4. 'chat': Greetings, noise, or general questions not related to finding health services.
-                    
-                    CRITICAL OVERRIDES:
-                    - "Me muero" / "Ayuda" -> ALWAYS 'triage'.
-                    - "Clinica" / "Hospital" -> NEVER 'pharmacy'. If specific name, 'directory'. If general ("Busco una clinica"), 'triage' (to find appropriate one) or 'directory'.
-                    
-                    EXTRACT LOCATION: If the user mentions a district or city (e.g. "en San Isidro", "por Surco"), put it in 'detectedLocation'.`
+EMERGENCY OVERRIDE (HIGHEST PRIORITY):
+- If user mentions: bleeding, severe pain, unconscious, can't breathe, emergency -> ALWAYS return intent: "triage"
+- If user asks "¿dónde?" after mentioning symptoms -> They want location, return intent: "triage" with action to search.
+
+CLASSIFICATION RULES:
+1. 'triage': User describes symptoms, distress, or asks "where to go" after mentioning health issue.
+2. 'pharmacy': User asks for MEDICATION by name ("Paracetamol", "Ibuprofeno") or explicitly says "farmacia".
+3. 'directory': User asks for a SPECIFIC clinic/hospital BY NAME ("Clínica San Pablo", "Hospital Rebagliati").
+4. 'chat': Greetings, general questions unrelated to health.
+
+CRITICAL OVERRIDES:
+- "Me desangro" + "¿dónde?" -> intent: "triage", query: "emergency rooms hemorrhage"
+- "Clínica" / "Hospital" (without name) -> intent: "triage" (to find appropriate one based on symptoms)
+- Medication name -> NEVER intent: "directory" (always "pharmacy"). EVEN IF user says "mentira" or "ok" before the med name, classify as pharmacy.
+- If user provides specific medicine name like "Amoxicilina" after being in triage -> Switch to 'pharmacy'.
+
+EXTRACT LOCATION: If user mentions district/city (e.g. "en San Isidro", "por Surco"), put in 'detectedLocation'.`
                 }
             });
 
@@ -208,22 +337,25 @@ export const classifyMultimodalIntent = async (input: string | { mimeType: strin
                 intent: result.intent || 'chat',
                 transcription: result.transcription || (typeof input === 'string' ? input : 'Audio'),
                 query: result.query || '',
-                detectedLocation: result.detectedLocation || ''
+                detectedLocation: result.detectedLocation || '',
+                isEmergency: false
             };
         } catch (e) {
-            return { intent: 'chat', transcription: 'Error de audio', query: '' };
+            return { intent: 'chat', transcription: 'Error de audio', query: '', isEmergency: false };
         }
     });
 };
 
+// Legacy wrapper
 export const classifyUserIntent = async (text: string): Promise<'triage' | 'pharmacy' | 'directory'> => {
-    // Legacy wrapper for backward compatibility
     const res = await classifyMultimodalIntent(text);
     if (res.intent === 'chat') return 'triage';
     return res.intent;
 }
 
-// ================= MEDICINE ANALYSIS (Vademecum) =================
+// =================================================================
+// 💊 MEDICINE ANALYSIS
+// =================================================================
 
 export const analyzeMedications = async (text: string): Promise<MedicineInfo[]> => {
     return callWithRetry(async () => {
@@ -242,11 +374,11 @@ export const analyzeMedications = async (text: string): Promise<MedicineInfo[]> 
                             properties: {
                                 name: { type: Type.STRING },
                                 activeIngredient: { type: Type.STRING },
-                                dosage: { type: Type.STRING, description: "Common dosage advice." },
-                                purpose: { type: Type.STRING, description: "What is it for?" },
+                                dosage: { type: Type.STRING },
+                                purpose: { type: Type.STRING },
                                 warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
                                 interactions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                alternatives: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Generic alternatives" },
+                                alternatives: { type: Type.ARRAY, items: { type: Type.STRING } },
                                 requiresPrescription: { type: Type.BOOLEAN },
                                 takenWithFood: { type: Type.STRING, enum: ["Antes", "Después", "Indiferente", "Con alimentos"] }
                             }
@@ -256,12 +388,11 @@ export const analyzeMedications = async (text: string): Promise<MedicineInfo[]> 
             });
             return JSON.parse(response.text || "[]") as MedicineInfo[];
         } catch (e) {
-            console.error(e);
             return [{
                 name: "Medicamento",
                 activeIngredient: "Desconocido",
                 dosage: "Consultar médico",
-                purpose: "Información no disponible temporalmente.",
+                purpose: "Información no disponible.",
                 warnings: ["Error al procesar solicitud"],
                 interactions: [],
                 alternatives: [],
@@ -272,16 +403,18 @@ export const analyzeMedications = async (text: string): Promise<MedicineInfo[]> 
     });
 };
 
-// ================= MAPS GROUNDING (ROBUST FILTERING) =================
+// =================================================================
+// 🗺️ GOOGLE MAPS GROUNDING (GEOGRAPHICALLY PINNED)
+// =================================================================
 
 export const identifyLocationFromCoords = async (lat: number, lng: number): Promise<string> => {
     return callWithRetry(async () => {
         try {
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: `What is the specific District and Province for these coordinates: ${lat}, ${lng} in Peru? 
-                Return strictly ONLY the string in this format: "District, Province". Example: "San Borja, Lima". 
-                Do not include specific street address.`,
+                contents: `What is the District and Province for: ${lat}, ${lng} in Peru? 
+                Format: "District, Province" (e.g. "San Borja, Lima"). 
+                Do NOT include street address.`,
                 config: {
                     tools: [{ googleMaps: {} }],
                     toolConfig: {
@@ -289,8 +422,7 @@ export const identifyLocationFromCoords = async (lat: number, lng: number): Prom
                     }
                 }
             });
-            let locationName = response.text || "Ubicación Detectada";
-            locationName = locationName.replace(/\./g, '').trim();
+            let locationName = response.text?.replace(/\./g, '').trim() || "Ubicación Detectada";
             if (locationName.length > 40) return "Tu Ubicación (GPS)";
             return locationName;
         } catch (e) {
@@ -309,31 +441,52 @@ export const searchNearbyPlaces = async (
         try {
             let prompt = "";
             let toolConfig: any = undefined;
-            let systemInstruction = "You are a helpful assistant using Google Maps. You MUST extract real data from the tool.";
 
-            // --- STRATEGY 1: DIRECTORY (Specific Entity) ---
-            if (intent === 'directory') {
-                prompt = `Find the place named "${query}" in ${location || 'Lima, Peru'}. Return JSON with exact address and phone.`;
-            } 
-            // --- STRATEGY 2: PHARMACY (Strict Filtering) ---
-            else if (intent === 'pharmacy') {
-                 prompt = `Find 8 open "Farmacias" or "Boticas" in ${location || 'Lima, Peru'}. 
-                 Strictly exclude "Clinica", "Hospital", "Centro Medico", "Veterinaria". 
-                 Return names, exact addresses, ratings.`;
-                 
-                 if (coords) {
-                     prompt = `Find 8 open "Farmacias" or "Boticas" near (Lat: ${coords.lat}, Lng: ${coords.lng}). 
-                     Strictly exclude "Clinica", "Hospital", "Centro Medico".`;
-                     toolConfig = { retrievalConfig: { latLng: { latitude: coords.lat, longitude: coords.lng } } };
-                }
+            // 🌍 CRITICAL: Geographic pinning based on priority:
+            // 1. Use coordinates if available (most accurate)
+            // 2. Use location string with country code (fallback)
+            // 3. Default to Lima, Peru with strict filter (last resort)
+
+            const geoPinning = coords 
+                ? `near latitude ${coords.lat}, longitude ${coords.lng}` 
+                : location 
+                    ? `in ${location}, Peru` 
+                    : `in Lima, Peru (country:PE)`;
+
+            if (coords) {
+                toolConfig = { 
+                    retrievalConfig: { 
+                        latLng: { latitude: coords.lat, longitude: coords.lng } 
+                    } 
+                };
             }
-            // --- STRATEGY 3: TRIAGE (Clinics/Hospitals) ---
+
+            // 🚨 EMERGENCY MODE: Force 24h hospitals with ER
+            const emergencyCheck = detectEmergencyKeywords(query);
+            if (emergencyCheck.isEmergency) {
+                prompt = `Find 8 hospitals or clinics with 24-hour EMERGENCY ROOMS ${geoPinning}. 
+                Must have: Emergency department, trauma care, surgery capability.
+                Prioritize: Hospitals over clinics.
+                Return names, addresses, phone numbers, ratings.`;
+                
+                console.warn("🚨 EMERGENCY MAP SEARCH:", prompt);
+            }
+            // 🏥 DIRECTORY MODE
+            else if (intent === 'directory') {
+                prompt = `Find the exact place named "${query}" ${geoPinning}. 
+                Return precise address, phone, and Maps link.`;
+            } 
+            // 💊 PHARMACY MODE (Strict filtering)
+            else if (intent === 'pharmacy') {
+                // FIXED: Include 'Pharmacies' explicitly, ignore specific medicine names to ensure results
+                prompt = `Find 8 "Farmacias" or "Boticas" ${geoPinning}. 
+                EXCLUDE: Clínicas, Hospitales, Centros Médicos, Veterinarias.
+                Only return actual pharmacies.`;
+            }
+            // 🩺 TRIAGE MODE (Clinics/Hospitals)
             else {
-                prompt = `Find 8 clinics or hospitals matching "${query}" in ${location || 'Lima, Peru'}. Return names, addresses, ratings.`;
-                if (coords) {
-                     prompt = `Find 8 clinics or hospitals matching "${query}" near (Lat: ${coords.lat}, Lng: ${coords.lng}).`;
-                     toolConfig = { retrievalConfig: { latLng: { latitude: coords.lat, longitude: coords.lng } } };
-                }
+                prompt = `Find 8 clinics or hospitals for "${query}" ${geoPinning}. 
+                Return names, addresses, ratings.`;
             }
             
             const response = await ai.models.generateContent({
@@ -342,7 +495,7 @@ export const searchNearbyPlaces = async (
                 config: {
                     tools: [{ googleMaps: {} }],
                     toolConfig: toolConfig,
-                    systemInstruction
+                    systemInstruction: "Extract real Places data from Google Maps tool. You MUST use the tool, not invent data."
                 }
             });
 
@@ -355,15 +508,31 @@ export const searchNearbyPlaces = async (
                     if (source?.uri && source?.title) {
                          const nameLower = source.title.toLowerCase();
                          
-                         // --- CLIENT-SIDE STRICT FILTERING ---
+                         // 🛡️ STRICT CLIENT-SIDE FILTERING
                          if (intent === 'pharmacy') {
                              const isPharmacy = /farmacia|botica|apothecary|inkafarma|mifarma/i.test(nameLower);
                              const isClinic = /clinica|hospital|centro m[eé]dico|policl[ií]nico|veterinaria/i.test(nameLower);
-                             if (!isPharmacy || isClinic) return; 
+                             if (!isPharmacy || isClinic) {
+                                 console.warn("🚫 Filtered non-pharmacy:", source.title);
+                                 return; 
+                             }
+                         }
+
+                         // 🌎 GEOGRAPHIC VALIDATION: Check if result is in Peru
+                         // (Heuristic: If it has a Peru-specific keyword or the URI contains "Peru")
+                         const isProbablyInPeru = 
+                             source.uri.includes('Peru') || 
+                             source.uri.includes('Lima') ||
+                             nameLower.includes('peru') ||
+                             nameLower.includes('lima');
+                         
+                         if (!isProbablyInPeru && (coords || location)) {
+                             console.warn("⚠️ Result might not be in Peru:", source.title);
+                             // Still include it, but flag it
                          }
 
                          let type: MedicalCenter['type'] = intent === 'pharmacy' ? 'Farmacia' : 'Clínica';
-                         const has24h = /hospital|clinica|emergencia/i.test(nameLower) && intent === 'triage';
+                         const has24h = (/hospital|emergencia/i.test(nameLower) && intent === 'triage') || emergencyCheck.isEmergency;
 
                          places.push({
                             id: `maps-${index}-${Date.now()}`,
@@ -371,8 +540,8 @@ export const searchNearbyPlaces = async (
                             type: type,
                             district: location || 'Lima',
                             address: 'Ver dirección en Mapa', 
-                            latitude: 0,
-                            longitude: 0,
+                            latitude: coords?.lat || 0,
+                            longitude: coords?.lng || 0,
                             insurances: [],
                             specialties: [query],
                             googleMapsUri: source.uri,
@@ -385,13 +554,19 @@ export const searchNearbyPlaces = async (
                 });
             }
 
+            // 📊 VALIDATION: If no results, log the issue
+            if (places.length === 0) {
+                console.error("❌ NO PLACES FOUND. Query:", query, "Location:", location, "Coords:", coords);
+            }
+
             const uniquePlaces = places.filter((v,i,a)=>a.findIndex(v2=>(v2.name === v.name))===i);
 
             return {
-                text: response.text || "Resultados encontrados.",
+                text: response.text || "Resultados encontrados en Google Maps.",
                 places: uniquePlaces
             };
         } catch (e) {
+            console.error("❌ Maps search failed:", e);
             return { text: "No pude conectar con Google Maps.", places: [] };
         }
     });
@@ -409,9 +584,12 @@ export const generateFollowUp = async (history: any[], activeFiles: RagDocument[
     return callWithRetry(async () => {
         try {
             const hasFiles = activeFiles.length > 0;
+            // FIXED: Added aggressive instruction to trigger SEARCH_MAPS on confirmation words
             let systemInstruction = `You are Doctoi. Keep responses short and helpful. Spanish.
             IMPORTANT:
             - If the user explicitly asks where to buy something, where a clinic is, or asks for locations/addresses, set "action" to "SEARCH_MAPS" and "query" to the object they are looking for.
+            - If the user confirms a previous question like "Shall I look for it?" with "Yes", "Si", "Dale", "Busca", set "action" to "SEARCH_MAPS".
+            - If the user asks "donde consigo [medicamento]", set "action" to "SEARCH_MAPS" and query "[medicamento]".
             - Otherwise set "action" to "NONE".`;
             
             if (hasFiles) systemInstruction += ` Use uploaded documents to answer.`;

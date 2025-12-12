@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { HeroSection } from './components/HeroSection';
@@ -264,40 +265,60 @@ export default function App() {
       setMobileTab('data');
   }
 
-  // ===================== REFACTORED: MULTIMODAL ROUTER & ACTION HANDLER =====================
+  // ===================== REFACTORED: ROBUST MULTIMODAL ROUTER =====================
   const handleSendMessage = async (text: string, audio?: { mimeType: string, data: string }) => {
     const currentSession = sessionRef.current;
     
-    // --- 1. UI FEEDBACK ---
+    // 1. UI FEEDBACK
     if (audio) {
         setIsTyping(true);
     } else {
         addMessage(text, 'user');
         setIsTyping(true);
     }
+
+    const input = audio ? audio : text;
+
+    // 2. ALWAYS CLASSIFY INTENT (Even in Step 3)
+    // This allows us to break out of context loops (e.g. Suicide -> Pharmacy)
+    const result = await classifyMultimodalIntent(input);
+
+    if (sessionRef.current !== currentSession) return;
+
+    if (audio) addMessage(`🎤 "${result.transcription}"`, 'user');
+
+    // 3. DETERMINE IF WE SWITCH FLOW OR CONTINUE CHAT
+    // A flow switch happens if:
+    // A. The identified intent is NOT chat (meaning it's a specific health/med command).
+    // B. We are in step 0/1 (initial setup).
+    // C. An EMERGENCY is detected.
+    const isFlowChange = (result.intent !== 'chat') || step < 3 || result.isEmergency;
     
-    // --- 2. MULTIMODAL CLASSIFICATION ROUTER (RUNS FOR AUDIO OR STEP 0 OR STEP 1) ---
-    // If Step 3, we use 'Chat' mode below. For everything else (Initial, Input, Audio), we verify intent.
-    if (audio || step === 0 || step === 1) {
-        const input = audio ? audio : text;
-        const result = await classifyMultimodalIntent(input);
-        
-        if (sessionRef.current !== currentSession) return;
+    // Special check: If user was in Emergency Triage, and asks for generic medicine, FORCE switch
+    const forceSwitch = analysis?.urgency === UrgencyLevel.EMERGENCY && result.intent === 'pharmacy';
 
-        if (audio) addMessage(`🎤 "${result.transcription}"`, 'user');
-
-        // FORCE FLOW UPDATE based on classifier, overriding previous selection if needed
+    if (isFlowChange || forceSwitch) {
+        // === FLOW SWITCHING / RE-EXECUTION LOGIC ===
         const newFlow = result.intent as Flow;
-        setFlow(newFlow); 
-        setSymptomsOrMed(result.query || result.transcription);
         
-        setMobileTab('chat');
-        setDynamicCenters([]);
+        // Accumulate symptoms if we are continuing in Triage mode (e.g. "I have fever" -> "And bleeding")
+        let effectiveQuery = result.query || result.transcription;
+        if (newFlow === 'triage' && flow === 'triage' && !result.isEmergency && analysis) {
+             effectiveQuery = `${symptomsOrMed}. ${effectiveQuery}`;
+        }
         
-        // Reset analysis based on new flow to avoid stale data
-        if (newFlow !== 'triage') setAnalysis(null);
-        if (newFlow !== 'pharmacy') setPharmacyAnalysis(null);
+        setFlow(newFlow);
+        setSymptomsOrMed(effectiveQuery);
         
+        // RESET STATE FOR NEW FLOW IF IT CHANGED
+        if (newFlow !== flow) {
+            setDynamicCenters([]);
+            setMobileTab('chat');
+            // Only clear the analysis relevant to the *other* flow
+            if (newFlow !== 'triage') setAnalysis(null);
+            if (newFlow !== 'pharmacy') setPharmacyAnalysis(null);
+        }
+
         if (result.detectedLocation) {
              setLocationState({ status: 'success', district: result.detectedLocation, coordinates: null });
              addMessage(`📍 Ubicación detectada en mensaje: ${result.detectedLocation}`, 'ai');
@@ -305,25 +326,30 @@ export default function App() {
 
         const hasValidLocation = !!locationState.district || !!result.detectedLocation || !!locationState.coordinates;
 
+        // EXECUTE FLOW LOGIC
         if (newFlow === 'triage') {
              try {
-                 const triageResult = await analyzeSymptoms(result.transcription);
+                 const triageResult = await analyzeSymptoms(effectiveQuery);
                  if (sessionRef.current !== currentSession) return;
                  setAnalysis(triageResult);
                  setIsTyping(false);
                  setUnreadAnalysis(true);
                  triggerToast('triage');
                  
-                 if (hasValidLocation) {
-                     addMessage("He analizado tus síntomas. Procedo a buscar centros médicos...", 'ai');
-                     setStep(3);
-                     
-                     // === MOBILE UX FIX: ONLY REDIRECT IF EMERGENCY ===
-                     const isEmergency = triageResult.urgency === UrgencyLevel.EMERGENCY || triageResult.urgency === UrgencyLevel.HIGH;
+                 const isEmergency = triageResult.urgency === UrgencyLevel.EMERGENCY;
+
+                 // 🚨 EMERGENCY BYPASS
+                 if (hasValidLocation || isEmergency) {
                      if (isEmergency) {
-                         setMobileTab('results');
+                        addMessage("🚨 EMERGENCIA DETECTADA. Mostrando protocolos de seguridad.", 'ai');
+                        // Force view on mobile
+                        setMobileTab('analysis'); 
+                        // Force right panel on desktop
+                        setRightPanelMode('results'); 
+                     } else {
+                        addMessage("He actualizado el análisis de síntomas. Buscando centros...", 'ai');
                      }
-                     // Else stay in chat
+                     setStep(3); 
                  } else {
                      addMessage("He analizado tus síntomas. Por favor, selecciona tu Departamento para ubicarte:", 'ai');
                      addMessage('', 'ai', 'department_selector');
@@ -334,7 +360,7 @@ export default function App() {
         } 
         else if (newFlow === 'pharmacy') {
              try {
-                const meds = await analyzeMedications(result.transcription);
+                const meds = await analyzeMedications(effectiveQuery);
                 if (sessionRef.current !== currentSession) return;
                 setPharmacyAnalysis(meds);
                 setIsTyping(false);
@@ -344,7 +370,6 @@ export default function App() {
                 if (hasValidLocation) {
                      addMessage("Información encontrada. Buscando farmacias cercanas...", 'ai');
                      setStep(3);
-                     // NO REDIRECT
                 } else {
                     addMessage("Información encontrada. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
                     addMessage('', 'ai', 'department_selector');
@@ -354,15 +379,14 @@ export default function App() {
              } catch(e) {}
         }
         else if (newFlow === 'directory') {
-             // Let the useEffect handle isTyping=true for the search
              setIsTyping(false); 
              setSymptomsOrMed(result.query); 
              addMessage(`Buscando detalles de "${result.query}"...`, 'ai');
              setStep(3);
-             // NO REDIRECT
              return;
         }
         else {
+            // Fallback to chat if intent classification failed slightly but we are in step 0
              setIsTyping(false);
              if (step === 0) {
                  addMessage("Hola. Puedo ayudarte con triaje, farmacias o directorio. ¿Qué necesitas?", 'ai');
@@ -372,10 +396,10 @@ export default function App() {
              }
              return;
         }
-    }
 
-    // --- 3. CHAT MODE (STEP 3) ---
-    else if (step === 3 && !audio) {
+    } else {
+        // === CONTEXTUAL CHAT LOGIC (ONLY FOR 'CHAT' INTENT) ===
+        
         const history = [
              ...messages.map(m => ({
                 role: m.sender === 'user' ? 'user' : 'model',
@@ -393,9 +417,7 @@ export default function App() {
 
              if (response.action === 'SEARCH_MAPS') {
                  if (response.query) setSymptomsOrMed(response.query);
-                 setStep(3);
-                 
-                 // NO REDIRECT. Toast handled by effect when results arrive.
+                 setStep(3); // Trigger map search effect
                  
                  if (!locationState.district && !locationState.coordinates) {
                      addMessage("Para mostrarte el mapa, necesito tu ubicación.", 'ai', 'department_selector');

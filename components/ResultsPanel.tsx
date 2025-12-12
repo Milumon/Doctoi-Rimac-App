@@ -144,7 +144,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
              )}
 
              {/* CASE 3: Error */}
-             {locationState?.status === 'error' && (
+             {locationState?.status === 'error' && !isManualLocationMode && (
                 <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
                     <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
                         <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
@@ -167,7 +167,6 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         
                         <button
                             onClick={() => {
-                                // Reset isn't directly exposed via prop here, but setting manual mode hides this view eventually if parent resets
                                 setIsManualLocationMode(true); 
                             }}
                             className="w-full py-3 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 transition"
@@ -179,35 +178,36 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
              )}
 
              {/* CASE 4: Idle / Default View */}
-             {locationState?.status === 'idle' && (
+             {(locationState?.status === 'idle' || isManualLocationMode) && (
                  <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-6">
                     <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-2 animate-bounce ${flow === 'pharmacy' ? 'bg-blue-50' : 'bg-emerald-50'}`}>
                          <svg className={`w-10 h-10 text-${headerColor}-500`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                     </div>
                     
-                    <div>
-                        <h3 className="text-xl font-bold text-slate-800">¿Dónde buscamos?</h3>
-                        <p className="text-sm text-slate-500 mt-2 max-w-[250px] mx-auto">
-                            Usaremos Google Maps para encontrar {flow === 'pharmacy' ? 'farmacias' : 'centros'} reales cerca de ti en Lima.
-                        </p>
-                    </div>
-
                     {!isManualLocationMode ? (
-                        <div className="w-full space-y-3">
-                             <button 
-                                onClick={onRequestLocation}
-                                className={`w-full py-3 text-white font-bold rounded-xl transition shadow-lg flex items-center justify-center gap-2 ${flow === 'pharmacy' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200'}`}
-                             >
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 18d-2 2-4-4-5-8 5-8 4 4 2 2z"></path></svg>
-                                Usar GPS (Preciso)
-                             </button>
-                             <button 
-                                onClick={() => setIsManualLocationMode(true)}
-                                className="w-full py-3 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 transition"
-                             >
-                                Seleccionar Distrito
-                             </button>
-                        </div>
+                        <>
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-800">¿Dónde buscamos?</h3>
+                                <p className="text-sm text-slate-500 mt-2 max-w-[250px] mx-auto">
+                                    Usaremos Google Maps para encontrar {flow === 'pharmacy' ? 'farmacias' : 'centros'} reales cerca de ti en Lima.
+                                </p>
+                            </div>
+                            <div className="w-full space-y-3">
+                                <button 
+                                    onClick={onRequestLocation}
+                                    className={`w-full py-3 text-white font-bold rounded-xl transition shadow-lg flex items-center justify-center gap-2 ${flow === 'pharmacy' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200'}`}
+                                >
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 18d-2 2-4-4-5-8 5-8 4 4 2 2z"></path></svg>
+                                    Usar GPS (Preciso)
+                                </button>
+                                <button 
+                                    onClick={() => setIsManualLocationMode(true)}
+                                    className="w-full py-3 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 transition"
+                                >
+                                    Seleccionar Distrito
+                                </button>
+                            </div>
+                        </>
                     ) : (
                         <div className="w-full space-y-3 bg-slate-50 p-4 rounded-2xl text-left animate-fade-enter">
                              <div className="flex justify-between items-center mb-2">
