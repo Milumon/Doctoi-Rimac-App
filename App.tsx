@@ -1,31 +1,26 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { HeroSection } from './components/HeroSection';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { ResultsPanel } from './components/ResultsPanel';
 import { DoctorChatPanel } from './components/DoctorChatPanel';
+import { DataPanel } from './components/DataPanel';
 import { DetailModal } from './components/DetailModal';
 import { MobileNavBar } from './components/MobileNavBar';
 import { MobileWelcome } from './components/MobileWelcome'; 
-import { Message, TriageAnalysis, MedicalCenter, Doctor } from './types';
-import { medicalCenters } from './data/centers';
+import { Message, TriageAnalysis, MedicalCenter, Doctor, RagDocument } from './types';
 import { doctors } from './data/doctors';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
-import { analyzeSymptoms, generateFollowUp, classifyUserIntent, consultMedicalDocuments, generateDoctorResponse } from './services/geminiService';
+import { analyzeSymptoms, generateFollowUp, classifyUserIntent, generateDoctorResponse, explainMedication, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
 // 1 = Input (Symptoms OR Medication OR Search Query)
-// 1.1 = Department Selection
-// 1.2 = Province Selection
-// 1.3 = District Selection
-// 1.5 = Manual Location (Fallback)
-// 2 = Insurance (Only for Triage)
-// 3 = Results
+// 3 = Results / Analysis (Location selection happens here now for Triage)
 type Step = 0 | 1 | 1.1 | 1.2 | 1.3 | 1.5 | 2 | 3;
 type Flow = 'triage' | 'pharmacy' | 'directory' | null;
-type MobileTab = 'chat' | 'analysis' | 'results' | 'doctor';
+type MobileTab = 'chat' | 'analysis' | 'results' | 'doctor' | 'data';
 
 export default function App() {
   const [step, setStep] = useState<Step>(0);
@@ -41,9 +36,20 @@ export default function App() {
   const [doctorMessages, setDoctorMessages] = useState<Message[]>([]);
   const [isDoctorTyping, setIsDoctorTyping] = useState(false);
   const [currentDoctor, setCurrentDoctor] = useState<Doctor | null>(null);
-  const [rightPanelMode, setRightPanelMode] = useState<'results' | 'doctor'>('results');
+  const [rightPanelMode, setRightPanelMode] = useState<'results' | 'doctor' | 'data'>('results');
+  
+  // RAG / DATA STATE
+  const [uploadedFiles, setUploadedFiles] = useState<RagDocument[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
 
-  // Session control to cancel pending async operations on reset
+  // MAPS GROUNDING STATE
+  const [dynamicCenters, setDynamicCenters] = useState<MedicalCenter[]>([]);
+  const [isLoadingResults, setIsLoadingResults] = useState(false);
+
+  // MODAL STATES
+  const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false); 
+
+  // Session control
   const sessionRef = useRef(0);
   
   // Mobile PWA State
@@ -54,23 +60,81 @@ export default function App() {
   const [symptomsOrMed, setSymptomsOrMed] = useState(''); 
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
   const [selectedProvinceId, setSelectedProvinceId] = useState('');
-  const [district, setDistrict] = useState('');
-  const [insurance, setInsurance] = useState('');
+  
+  // Store user coordinates if available for better Grounding
+  const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
+  const [district, setDistrict] = useState(''); // This now holds the display string or manually selected location
+  
+  const [insurance, setInsurance] = useState('Sin Seguro');
   
   const [analysis, setAnalysis] = useState<TriageAnalysis | null>(null);
   const [selectedCenter, setSelectedCenter] = useState<MedicalCenter | null>(null);
 
-  // PWA Install Prompt Listener
+  // Initial Data Load
+  useEffect(() => {
+    const syncFiles = async () => {
+        const files = await getActiveFilesFromGemini();
+        setUploadedFiles(files);
+    };
+    syncFiles();
+  }, []);
+
+  useEffect(() => {
+      if (uploadedFiles.some(f => f.state === 'PROCESSING')) {
+          const interval = setInterval(async () => {
+              const files = await getActiveFilesFromGemini();
+              setUploadedFiles(files);
+          }, 4000); 
+          return () => clearInterval(interval);
+      }
+  }, [uploadedFiles]);
+
+  // ===================== CORE LOGIC: TRIGGER MAPS SEARCH =====================
+  useEffect(() => {
+    const performDynamicSearch = async () => {
+        const isDirectoryMode = flow === 'directory';
+        
+        // CRITICAL: Ensure we have a query AND (Location OR Directory Mode)
+        const hasLocation = !!district || !!userCoords;
+        const hasQuery = !!symptomsOrMed || !!analysis;
+
+        if (step === 3 && flow && hasQuery && (hasLocation || isDirectoryMode)) {
+            
+            let query = '';
+            if (flow === 'pharmacy') {
+                // FIXED: Just search for pharmacies in general, do NOT include the medication name
+                // as we cannot verify stock via Maps API.
+                query = 'Farmacias y Boticas';
+            }
+            else if (flow === 'triage') query = analysis?.specialty ? `clínicas para ${analysis.specialty}` : 'centros de salud';
+            else query = symptomsOrMed || 'clínicas'; 
+
+            setIsLoadingResults(true);
+            setDynamicCenters([]); 
+
+            // Directory mode uses 'Lima, Peru' as default if no location selected yet
+            const searchLocation = district || (isDirectoryMode ? 'Lima, Peru' : '');
+
+            const result = await searchNearbyPlaces(query, searchLocation, userCoords, flow);
+            
+            if (sessionRef.current === currentSessionId) {
+                setDynamicCenters(result.places);
+                setIsLoadingResults(false);
+            }
+        }
+    };
+    
+    const currentSessionId = sessionRef.current;
+    performDynamicSearch();
+  }, [step, district, userCoords, flow, symptomsOrMed, analysis]); 
+
+  // PWA Install
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
-      // Prevent Chrome 67 and earlier from automatically showing the prompt
       e.preventDefault();
-      // Stash the event so it can be triggered later.
       setDeferredPrompt(e);
     };
-
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
@@ -78,12 +142,8 @@ export default function App() {
 
   const handleInstallApp = async () => {
     if (!deferredPrompt) return;
-    // Show the install prompt
     deferredPrompt.prompt();
-    // Wait for the user to respond to the prompt
     const { outcome } = await deferredPrompt.userChoice;
-    console.log(`User response to the install prompt: ${outcome}`);
-    // We've used the prompt, and can't use it again, throw it away
     setDeferredPrompt(null);
   };
 
@@ -98,8 +158,17 @@ export default function App() {
 
   const handleSelectIntent = (selectedFlow: 'triage' | 'pharmacy' | 'directory') => {
       const currentSession = sessionRef.current;
+      
+      // === RESET STATE to prevent old data from appearing ===
       setFlow(selectedFlow);
-      setMobileTab('chat'); // Ensure we are on chat tab
+      setDistrict('');           
+      setUserCoords(undefined);  
+      setDynamicCenters([]);     
+      setAnalysis(null);         
+      setSymptomsOrMed('');      
+      setStep(0);                
+      setMobileTab('chat');
+      
       let intentText = '';
       if (selectedFlow === 'pharmacy') intentText = 'Busco medicamentos';
       else if (selectedFlow === 'directory') intentText = 'Busco una clínica específica';
@@ -116,153 +185,188 @@ export default function App() {
           } else if (selectedFlow === 'directory') {
               addMessage("¿Qué clínica, hospital o centro médico buscas?", 'ai');
           } else {
-              addMessage("Entendido. Cuéntame qué sientes detalladamente.", 'ai');
+              addMessage("Entendido. Cuéntame qué sientes (puedes usar el micrófono).", 'ai');
           }
           setStep(1);
       }, 600);
   };
 
-  const handleSendMessage = async (text: string) => {
+  const handleUploadFile = async (file: File) => {
+      setIsUploading(true);
+      try {
+          const newDoc = await uploadFileToGemini(file);
+          setUploadedFiles(prev => [...prev, newDoc]);
+          if (mobileTab === 'chat' || rightPanelMode !== 'data') {
+              addMessage(`📂 He recibido el archivo "${file.name}". Lo usaré para responder tus preguntas.`, 'ai');
+          }
+      } catch (error) {
+          addMessage("⚠️ Error al subir el archivo. Inténtalo de nuevo.", 'ai');
+      } finally {
+          setIsUploading(false);
+      }
+  };
+
+  const handleDeleteFile = async (fileId: string) => {
+      try {
+          await deleteFileFromGemini(fileId);
+          setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
+      } catch (error) {
+          console.error("Delete error", error);
+      }
+  };
+
+  const handleShowData = () => {
+      setRightPanelMode('data');
+      setMobileTab('data');
+  }
+
+  const handleSendMessage = async (text: string, audio?: { mimeType: string, data: string }) => {
     const currentSession = sessionRef.current;
-    addMessage(text, 'user');
+    
+    if (audio) {
+        addMessage("🎤 [Audio Recibido]", 'user');
+    } else {
+        addMessage(text, 'user');
+    }
+    
     setIsTyping(true);
 
-    // STEP 0: INTELLIGENT CLASSIFICATION (User typed directly)
+    // STEP 0: INTELLIGENT CLASSIFICATION (Fallback logic for free text input)
     if (step === 0) {
         const detectedIntent = await classifyUserIntent(text);
         if (sessionRef.current !== currentSession) return;
 
+        // Force reset on intent change
         setFlow(detectedIntent);
-        setSymptomsOrMed(text); // Save what they typed
+        setSymptomsOrMed(text); 
         setMobileTab('chat');
-        
-        setTimeout(() => {
-            if (sessionRef.current !== currentSession) return;
-            setIsTyping(false);
-            let reply = "";
-            if (detectedIntent === 'pharmacy') reply = `Entendido, buscaré farmacias para "${text}".`;
-            else if (detectedIntent === 'directory') reply = `Buscando "${text}" en el directorio.`;
-            else reply = "Entendido, analizaré tus síntomas.";
+        setDistrict('');
+        setDynamicCenters([]);
+        setAnalysis(null); // Ensure no old analysis sticks
 
-            addMessage(reply, 'ai');
-            
-            if (detectedIntent === 'directory') {
-                 addMessage("Para mostrarte resultados cercanos, selecciona tu Departamento:", 'ai');
+        if (detectedIntent === 'triage') {
+             try {
+                 const result = await analyzeSymptoms(text);
+                 if (sessionRef.current !== currentSession) return;
+                 setAnalysis(result);
+                 setIsTyping(false);
+                 addMessage("He analizado tus síntomas. Ahora, selecciona tu Departamento para ubicarte:", 'ai');
                  addMessage('', 'ai', 'department_selector');
                  setStep(1.1);
-            } else {
-                 addMessage("Para continuar, selecciona tu Departamento:", 'ai');
-                 addMessage('', 'ai', 'department_selector');
-                 setStep(1.1);
-            }
-        }, 1000);
+                 setMobileTab('analysis');
+                 return;
+             } catch(e) {}
+        } else if (detectedIntent === 'pharmacy') {
+             try {
+                const explanation = await explainMedication(text);
+                if (sessionRef.current !== currentSession) return;
+                setIsTyping(false);
+                addMessage(explanation, 'ai');
+                addMessage("Entendido. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
+                addMessage('', 'ai', 'department_selector');
+                setStep(1.1);
+                return;
+             } catch(e) {}
+        } 
+        
+        if (detectedIntent === 'directory') {
+             setIsTyping(false);
+             addMessage(`Buscando detalles de "${text}"...`, 'ai');
+             setStep(3); // Go straight to search
+             setMobileTab('results');
+             return;
+        }
         return;
     }
 
-    // Step 1: User inputs symptoms/medicine/query manually AFTER clicking a card
+    // Step 1: User inputs symptoms/medication/query
     if (step === 1) {
-        setSymptomsOrMed(text);
-        setTimeout(() => {
-            if (sessionRef.current !== currentSession) return;
-            setIsTyping(false);
-            addMessage("Perfecto. Para ubicar opciones, selecciona tu Departamento:", 'ai');
-            addMessage('', 'ai', 'department_selector');
-            setStep(1.1);
-        }, 800);
+        if (!audio) setSymptomsOrMed(text);
+        
+        // TRIAGE FLOW
+        if (flow === 'triage') {
+             try {
+                 const input = audio || text;
+                 const result = await analyzeSymptoms(input);
+                 if (sessionRef.current !== currentSession) return;
+
+                 // Logic updated to accept confidence > 5 (fail open)
+                 if (result.confidence < 5 && result.detectedSymptoms.length === 0) {
+                     setIsTyping(false);
+                     addMessage("Sigo sin detectar síntomas claros. Intenta decir: 'Me duele la cabeza' o 'Tengo fiebre'.", 'ai');
+                     return;
+                 }
+
+                 setAnalysis(result);
+                 setIsTyping(false);
+                 
+                 // CRITICAL FIX: Direct to Location Selection
+                 addMessage("He analizado tus síntomas. Ahora, selecciona tu Departamento para ubicarte:", 'ai');
+                 addMessage('', 'ai', 'department_selector');
+                 setStep(1.1); 
+                 setMobileTab('analysis'); 
+                 return;
+             } catch (e) {
+                 setIsTyping(false);
+                 addMessage("Hubo un error analizando. Intenta de nuevo.", 'ai');
+                 return;
+             }
+        } 
+        
+        // PHARMACY FLOW
+        if (flow === 'pharmacy' && !audio) {
+            try {
+                setAnalysis(null); // Ensure no analysis panel
+                const explanation = await explainMedication(text);
+                if (sessionRef.current !== currentSession) return;
+                setIsTyping(false);
+                addMessage(explanation, 'ai');
+                
+                // CRITICAL FIX: Direct to Location Selection
+                addMessage("Confirma tu ubicación seleccionando tu Departamento:", 'ai');
+                addMessage('', 'ai', 'department_selector');
+                setStep(1.1);
+                return;
+            } catch (e) { setIsTyping(false); }
+        }
+
+        // DIRECTORY FLOW (Immediate Search)
+        if (flow === 'directory' && !audio) {
+             setIsTyping(false);
+             addMessage(`Buscando detalles de "${text}"...`, 'ai');
+             setStep(3);
+             setMobileTab('results');
+             return;
+        }
     } 
-    // Step 1.5: Manual Location Fallback
-    else if (step === 1.5) {
+    // Step 1.5: Manual Location Fallback (Chat based)
+    else if (step === 1.5 && !audio) {
         setDistrict(text);
         setTimeout(() => {
             if (sessionRef.current !== currentSession) return;
             setIsTyping(false);
-            
-            if (flow === 'pharmacy') {
-                addMessage(`Buscaré farmacias en ${text}.`, 'ai');
-                setStep(3);
-                setMobileTab('results'); // Auto switch to results on mobile
-            } else if (flow === 'directory') {
-                addMessage(`Buscando en ${text}...`, 'ai');
-                setStep(3);
-                setMobileTab('results'); // Auto switch to results on mobile
-            } else {
-                // Go to insurance for Triage
-                addMessage(`Perfecto, buscaré en ${text}. Por último, ¿qué seguro tienes?`, 'ai');
-                addMessage('', 'ai', 'insurance_selector');
-                setStep(2);
-            }
+            addMessage(`Entendido. Buscando en ${text}...`, 'ai');
+            setStep(3);
+            setMobileTab('results');
         }, 600);
     }
-    // Step 3: Follow up chat AND Intent Switching
+    // Step 3: Follow up chat
     else if (step === 3) {
-        // 0. SPECIAL CHECK: RAG / DOCUMENT QUERY
-        const insuranceKeywords = /cobertura|seguro|cubre|deducible|pago|costo|plan|rimac|pacifico|mapfre/i;
-        if (insuranceKeywords.test(text)) {
-             try {
-                 const docResponse = await consultMedicalDocuments(text);
-                 if (sessionRef.current !== currentSession) return;
-                 setIsTyping(false);
-                 addMessage(docResponse, 'ai');
-                 return; 
-             } catch(e) {
-                 console.error("RAG error", e);
-             }
-        }
+        // ... Follow up logic ...
+        const history = [
+             ...messages.map(m => ({
+                role: m.sender === 'user' ? 'user' : 'model',
+                parts: [{ text: m.text }]
+             })),
+             { role: 'user', parts: [{ text: text }] }
+        ].filter(m => m.parts[0].text && !m.parts[0].text.includes('selecciona') && !m.parts[0].text.includes('Usar mi ubicación'));
 
-        // 1. Check for intent change
-        const detectedIntent = await classifyUserIntent(text);
-        if (sessionRef.current !== currentSession) return;
-
-        const isDifferentFlow = detectedIntent !== flow;
-        
-        if (isDifferentFlow) {
-             setFlow(detectedIntent);
-             setSymptomsOrMed(text); 
-             setMobileTab('chat'); 
-             setIsTyping(false);
-
-             if (detectedIntent === 'triage') {
-                 addMessage(`Entendido. Parece que ahora tienes un malestar (${text}). Para darte un diagnóstico, necesito saber tu seguro.`, 'ai');
-                 addMessage('', 'ai', 'insurance_selector');
-                 setStep(2); 
-                 return;
-             } 
-             
-             if (detectedIntent === 'pharmacy') {
-                 addMessage(`Cambiando a Farmacia. Buscando "${text}" en ${district}.`, 'ai');
-                 setStep(3);
-                 setMobileTab('results');
-                 return;
-             }
-
-             if (detectedIntent === 'directory') {
-                 addMessage(`Cambiando a Directorio. Buscando "${text}" en ${district}.`, 'ai');
-                 setStep(3);
-                 setMobileTab('results');
-                 return;
-             }
-        }
-
-        // 2. Standard Follow-up
         try {
-             const history = [
-                 ...messages.map(m => ({
-                    role: m.sender === 'user' ? 'user' : 'model',
-                    parts: [{ text: m.text }]
-                 })),
-                 { role: 'user', parts: [{ text: text }] }
-             ].filter(m => m.parts[0].text && !m.parts[0].text.includes('selecciona') && !m.parts[0].text.includes('Usar mi ubicación'));
-
-             const response = await generateFollowUp(history);
+             const response = await generateFollowUp(history, uploadedFiles);
              if (sessionRef.current !== currentSession) return;
-             
              setIsTyping(false);
              addMessage(response, 'ai');
-        } catch (e) {
-            if (sessionRef.current !== currentSession) return;
-            setIsTyping(false);
-            addMessage("Lo siento, tuve un problema de conexión. Intenta de nuevo.", 'ai');
-        }
+        } catch(e) { setIsTyping(false); }
     }
   };
 
@@ -271,108 +375,65 @@ export default function App() {
       const currentSession = sessionRef.current;
       addDoctorMessage(text, 'user');
       setIsDoctorTyping(true);
-
       try {
           const history = [
-              ...doctorMessages.map(m => ({
-                  role: m.sender === 'user' ? 'user' : 'model',
-                  parts: [{ text: m.text }]
-              })),
+              ...doctorMessages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })),
               { role: 'user', parts: [{ text: text }] }
           ];
-
           const response = await generateDoctorResponse(history, currentDoctor, analysis);
-          
           if (sessionRef.current !== currentSession) return;
           setIsDoctorTyping(false);
           addDoctorMessage(response, 'doctor');
-
-      } catch (e) {
-          if (sessionRef.current !== currentSession) return;
-          setIsDoctorTyping(false);
-          addDoctorMessage("Lo siento, se cortó la conexión. Intenta de nuevo.", 'doctor');
-      }
+      } catch (e) { setIsDoctorTyping(false); }
   };
 
   const handleRequestLocation = () => {
     const currentSession = sessionRef.current;
-
     if (!navigator.geolocation) {
       addMessage("Tu navegador no soporta geolocalización.", 'ai');
       return;
     }
-
     setIsRequestingLocation(true);
-
     navigator.geolocation.getCurrentPosition(
-      (position) => {
+      async (position) => {
         if (sessionRef.current !== currentSession) return;
-
         const { latitude, longitude } = position.coords;
-        let closestDist = '';
-        let minDistance = Infinity;
-
-        medicalCenters.forEach(center => {
-           const d = Math.sqrt(Math.pow(center.latitude - latitude, 2) + Math.pow(center.longitude - longitude, 2));
-           if (d < minDistance) {
-               minDistance = d;
-               closestDist = center.district;
-           }
-        });
-
+        setUserCoords({ lat: latitude, lng: longitude });
+        
+        // Initial feedback
+        setDistrict("Detectando nombre de zona...");
         setIsRequestingLocation(false);
+        addMessage(`📍 GPS detectado. Identificando zona...`, 'user');
+        setStep(3);
+        setMobileTab('results');
 
-        if (closestDist) {
-            setDistrict(closestDist);
-            addMessage(`📍 Ubicación detectada: ${closestDist}`, 'user');
-            
-            setTimeout(() => {
-                 if (sessionRef.current !== currentSession) return;
-
-                 if (flow === 'pharmacy') {
-                     addMessage(`Buscaré farmacias cercanas en ${closestDist}.`, 'ai');
-                     setStep(3);
-                     setMobileTab('results');
-                 } else if (flow === 'directory') {
-                     addMessage(`Mostrando resultados en ${closestDist}.`, 'ai');
-                     setStep(3);
-                     setMobileTab('results');
-                 } else {
-                     addMessage(`Detecté tu ubicación cerca de ${closestDist}. ¿Qué seguro de salud tienes?`, 'ai');
-                     addMessage('', 'ai', 'insurance_selector');
-                     setStep(2);
-                 }
-            }, 500);
-        } else {
-            addMessage("No pude determinar tu distrito exacto. Por favor escríbelo manualmente.", 'ai');
-            setStep(1.5);
+        // Parallel Process: Reverse Geocoding to get real name
+        try {
+            const realLocationName = await identifyLocationFromCoords(latitude, longitude);
+            if (sessionRef.current === currentSession) {
+                setDistrict(realLocationName); // Updates the ResultsPanel label
+            }
+        } catch (e) {
+             if (sessionRef.current === currentSession) {
+                setDistrict("Tu Ubicación (GPS)");
+             }
         }
       },
       (error) => {
         if (sessionRef.current !== currentSession) return;
         setIsRequestingLocation(false);
-        let errorMessage = "No pude obtener tu ubicación. Por favor selecciona manualmente.";
-        // error.code 1 is PERMISSION_DENIED
-        if (error.code === 1) {
-            errorMessage = "⚠️ Permiso de ubicación denegado. Selecciona tu ubicación manualmente.";
-        } else if (error.code === 3) { // TIMEOUT
-            errorMessage = "⌛ Se agotó el tiempo de espera. Intenta de nuevo o selecciona manualmente.";
-        }
-        addMessage(errorMessage, 'ai');
+        addMessage("No pude obtener tu ubicación GPS. Por favor selecciónala manualmente.", 'ai');
       },
-      { timeout: 10000, enableHighAccuracy: false }
+      { timeout: 10000, enableHighAccuracy: true }
     );
   };
 
   const handleSelectDepartment = (deptId: string) => {
-      const currentSession = sessionRef.current;
       const deptName = DEPARTMENTS.find(d => d.id === deptId)?.name || '';
       setSelectedDepartmentId(deptId);
       addMessage(deptName, 'user');
       setIsTyping(true);
-
       setTimeout(() => {
-          if (sessionRef.current !== currentSession) return;
           setIsTyping(false);
           addMessage(`¿En qué provincia de ${deptName} te encuentras?`, 'ai');
           addMessage('', 'ai', 'province_selector');
@@ -381,14 +442,11 @@ export default function App() {
   };
 
   const handleSelectProvince = (provId: string) => {
-      const currentSession = sessionRef.current;
       const provName = PROVINCES.find(p => p.id === provId)?.name || '';
       setSelectedProvinceId(provId);
       addMessage(provName, 'user');
       setIsTyping(true);
-
       setTimeout(() => {
-          if (sessionRef.current !== currentSession) return;
           setIsTyping(false);
           addMessage(`¿Y en qué distrito?`, 'ai');
           addMessage('', 'ai', 'district_selector');
@@ -397,81 +455,44 @@ export default function App() {
   };
 
   const handleSelectDistrict = (distId: string) => {
-      const currentSession = sessionRef.current;
-      const distName = DISTRICTS.find(d => d.id === distId)?.name || '';
-      setDistrict(distName);
-      addMessage(distName, 'user');
+      const dist = DISTRICTS.find(d => d.id === distId);
+      const dept = DEPARTMENTS.find(d => d.id === selectedDepartmentId);
+      const prov = PROVINCES.find(p => p.id === selectedProvinceId);
+      const fullLocation = `${dist?.name}, ${prov?.name}, ${dept?.name}`;
+      
+      setDistrict(fullLocation);
+      setUserCoords(undefined); 
+
+      addMessage(dist?.name || '', 'user');
       setIsTyping(true);
       
       setTimeout(() => {
-          if (sessionRef.current !== currentSession) return;
           setIsTyping(false);
-          if (flow === 'pharmacy') {
-              addMessage(`Buscando farmacias en ${distName}...`, 'ai');
-              setStep(3);
-              setMobileTab('results');
-          } else if (flow === 'directory') {
-              addMessage(`Buscando en ${distName}...`, 'ai');
-              setStep(3);
-              setMobileTab('results');
-          } else {
-              addMessage(`Buscando centros en ${distName}. Por último, ¿qué seguro tienes?`, 'ai');
-              addMessage('', 'ai', 'insurance_selector');
-              setStep(2);
-          }
+          addMessage(`Buscando en ${fullLocation}...`, 'ai');
+          setStep(3);
+          setMobileTab('results');
       }, 600);
   };
 
-  const handleSelectInsurance = async (ins: string) => {
-      const currentSession = sessionRef.current;
-      setInsurance(ins);
-      addMessage(ins, 'user');
-      setIsTyping(true);
-
-      try {
-          const result = await analyzeSymptoms(symptomsOrMed);
-          if (sessionRef.current !== currentSession) return;
-
-          setAnalysis(result);
-          
-          setTimeout(() => {
-            if (sessionRef.current !== currentSession) return;
-            setIsTyping(false);
-            addMessage("He analizado tus síntomas. Revisa la pestaña de Análisis y Resultados.", 'ai');
-            setStep(3);
-            setMobileTab('results'); 
-          }, 1000);
-      } catch (e) {
-          if (sessionRef.current !== currentSession) return;
-          setIsTyping(false);
-          addMessage("Tuve un problema analizando los datos. Por favor intenta de nuevo.", 'ai');
-      }
-  };
-
+  const handleSelectInsurance = (ins: string) => { setInsurance(ins); };
   const handleContactDoctor = () => {
-      const currentSession = sessionRef.current;
       if (!analysis) return;
-
-      // Set UI State
+      const bestMatch = doctors.find(d => d.especialidad_principal.toLowerCase().includes(analysis.specialty.toLowerCase())) || doctors[0];
+      setCurrentDoctor(bestMatch);
       setMobileTab('doctor');
       setRightPanelMode('doctor');
       setIsDoctorTyping(true);
-
-      // Find the best doctor match
-      const bestMatch = doctors.find(d => d.especialidad_principal.toLowerCase().includes(analysis.specialty.toLowerCase())) || doctors[0];
-      
-      setCurrentDoctor(bestMatch);
-      setDoctorMessages([]); // Clear previous chats if any
-
+      setDoctorMessages([]);
       setTimeout(() => {
-          if (sessionRef.current !== currentSession) return;
           setIsDoctorTyping(false);
           const doctorGreeting = `Hola, soy el Dr. ${bestMatch.apellido_paterno}. He revisado tu pre-diagnóstico de ${analysis.specialty}. Para brindarte una mejor orientación, ¿podrías decirme desde cuándo presentas estos síntomas?`;
           addDoctorMessage(doctorGreeting, 'doctor');
       }, 1500);
   }
 
-  const handleReset = () => {
+  const handleReset = () => { if (currentDoctor) setShowEndSessionConfirm(true); else performReset(); };
+
+  const performReset = () => {
       sessionRef.current += 1; 
       setStep(0);
       setFlow(null);
@@ -483,7 +504,8 @@ export default function App() {
       setSelectedDepartmentId('');
       setSelectedProvinceId('');
       setDistrict('');
-      setInsurance('');
+      setUserCoords(undefined);
+      setInsurance('Sin Seguro');
       setAnalysis(null);
       setIsRequestingLocation(false);
       setSelectedCenter(null);
@@ -492,21 +514,21 @@ export default function App() {
       setCurrentDoctor(null);
       setDoctorMessages([]);
       setRightPanelMode('results');
+      setShowEndSessionConfirm(false);
+      setUploadedFiles([]); 
+      getActiveFilesFromGemini().then(setUploadedFiles);
+      setDynamicCenters([]);
   };
 
   const hasAnalysis = !!analysis;
   const hasResults = step === 3;
   const hasDoctor = !!currentDoctor;
+  const hasData = uploadedFiles.length > 0 || rightPanelMode === 'data';
 
   return (
     <div className="h-full w-full overflow-hidden flex flex-col md:items-center md:justify-center md:p-8 relative">
-       
-       {/* GLOBAL BACKGROUND: Unified background for the whole app */}
        <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none bg-slate-50">
-          {/* Animated Blobs */}
           <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] md:w-[500px] md:h-[500px] bg-blue-200/40 md:bg-blue-100/50 rounded-full blur-[80px] md:blur-3xl animate-blob"></div>
-          
-          {/* Decorative Background Logo (Global) - Positioned bottom right */}
           <div className="absolute bottom-[-50px] right-[-50px] md:bottom-[-80px] md:right-[-80px] opacity-10 md:opacity-20 transform rotate-[-15deg] scale-150">
              <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <defs>
@@ -526,7 +548,6 @@ export default function App() {
           </div>
        </div>
 
-       {/* Mobile Welcome Overlay */}
        <MobileWelcome 
             isVisible={showMobileWelcome} 
             onStart={() => setShowMobileWelcome(false)} 
@@ -534,11 +555,8 @@ export default function App() {
             canInstall={!!deferredPrompt}
        />
 
-       {/* MAIN CONTAINER */}
        <main className="w-full h-full md:max-w-7xl md:h-[75vh] relative z-10">
-          
-          {/* DESKTOP LAYOUT */}
-          <div className="hidden lg:grid grid-cols-12 gap-6 h-full">
+          <div className="hidden lg:grid grid-cols-12 gap-6 h-full min-h-0">
              <ChatPanel 
                  messages={messages} 
                  onSendMessage={handleSendMessage}
@@ -549,31 +567,42 @@ export default function App() {
                  onSelectInsurance={handleSelectInsurance}
                  onReset={handleReset}
                  onRequestLocation={handleRequestLocation}
+                 onShowData={handleShowData}
                  isTyping={isTyping}
                  isRequestingLocation={isRequestingLocation}
                  currentStep={step}
                  selectedDepartmentId={selectedDepartmentId}
                  selectedProvinceId={selectedProvinceId}
                  flow={flow}
+                 isConsultationActive={!!currentDoctor}
              />
              
-             {step < 3 ? (
+             {step < 3 && rightPanelMode !== 'data' ? (
                  <HeroSection />
              ) : (
                  <>
-                     {flow === 'triage' && analysis && <AnalysisPanel analysis={analysis} onContactDoctor={handleContactDoctor} />}
+                     {flow === 'triage' && analysis && rightPanelMode !== 'data' && (
+                        <AnalysisPanel 
+                            analysis={analysis} 
+                            onContactDoctor={handleContactDoctor} 
+                            userInsurance={insurance} 
+                        />
+                     )}
                      
-                     {/* The Rightmost Panel switches between Results and Doctor Chat */}
-                     {/* REMOVED overflow-hidden to allow rings/shadows/rounded corners to show properly */}
-                     <div className={`${(flow === 'pharmacy' || flow === 'directory') ? 'col-span-8' : 'col-span-4'} h-full relative`}>
+                     <div className={`${(flow === 'pharmacy' || flow === 'directory' || rightPanelMode === 'data') ? 'col-span-8' : 'col-span-4'} h-full relative flex flex-col min-h-0`}>
                          {rightPanelMode === 'results' && (
                              <ResultsPanel 
-                                centers={medicalCenters} 
                                 onSelectCenter={setSelectedCenter} 
                                 userDistrict={district}
                                 userInsurance={insurance}
                                 flow={flow}
                                 query={symptomsOrMed}
+                                onRequestLocation={handleRequestLocation}
+                                isRequestingLocation={isRequestingLocation}
+                                onSetLocation={setDistrict}
+                                onSetInsurance={setInsurance}
+                                dynamicResults={dynamicCenters}
+                                isLoading={isLoadingResults}
                             />
                          )}
                          {rightPanelMode === 'doctor' && currentDoctor && (
@@ -585,15 +614,20 @@ export default function App() {
                                 isTyping={isDoctorTyping}
                              />
                          )}
+                         {rightPanelMode === 'data' && (
+                             <DataPanel 
+                                files={uploadedFiles}
+                                onUpload={handleUploadFile}
+                                onDelete={handleDeleteFile}
+                                isUploading={isUploading}
+                             />
+                         )}
                      </div>
                  </>
              )}
           </div>
 
-          {/* MOBILE LAYOUT: FLEX COLUMN to stack NavBar at bottom */}
-          <div className="lg:hidden h-full w-full flex flex-col">
-              
-              {/* Content Area: Takes remaining space (flex-1) */}
+          <div className="lg:hidden h-full w-full flex flex-col min-h-0">
               <div className="flex-1 relative overflow-hidden w-full">
                   <div className={`absolute inset-0 transition-opacity duration-300 bg-slate-50/50 ${mobileTab === 'chat' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
                        <ChatPanel 
@@ -606,30 +640,43 @@ export default function App() {
                             onSelectInsurance={handleSelectInsurance}
                             onReset={handleReset}
                             onRequestLocation={handleRequestLocation}
+                            onShowData={handleShowData}
                             isTyping={isTyping}
                             isRequestingLocation={isRequestingLocation}
                             currentStep={step}
                             selectedDepartmentId={selectedDepartmentId}
                             selectedProvinceId={selectedProvinceId}
                             flow={flow}
+                            isConsultationActive={!!currentDoctor}
                         />
                   </div>
-
+                  {/* ... other mobile panels ... */}
                   {hasAnalysis && (
                       <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'analysis' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
-                          {analysis && <AnalysisPanel analysis={analysis} onContactDoctor={handleContactDoctor} />}
+                          {analysis && (
+                            <AnalysisPanel 
+                                analysis={analysis} 
+                                onContactDoctor={handleContactDoctor} 
+                                userInsurance={insurance} 
+                            />
+                          )}
                       </div>
                   )}
 
                   {hasResults && (
                        <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'results' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
                            <ResultsPanel 
-                                centers={medicalCenters} 
                                 onSelectCenter={setSelectedCenter} 
                                 userDistrict={district}
                                 userInsurance={insurance}
                                 flow={flow}
                                 query={symptomsOrMed}
+                                onRequestLocation={handleRequestLocation}
+                                isRequestingLocation={isRequestingLocation}
+                                onSetLocation={setDistrict}
+                                onSetInsurance={setInsurance}
+                                dynamicResults={dynamicCenters}
+                                isLoading={isLoadingResults}
                             />
                        </div>
                   )}
@@ -645,15 +692,24 @@ export default function App() {
                             />
                         </div>
                   )}
+
+                  <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'data' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
+                        <DataPanel 
+                            files={uploadedFiles}
+                            onUpload={handleUploadFile}
+                            onDelete={handleDeleteFile}
+                            isUploading={isUploading}
+                        />
+                  </div>
               </div>
 
-              {/* Navigation Bar: Stacks at the bottom naturally */}
               <MobileNavBar 
                 activeTab={mobileTab} 
                 setActiveTab={setMobileTab} 
                 hasAnalysis={!!analysis && flow === 'triage'}
                 hasResults={step === 3}
                 hasDoctor={hasDoctor}
+                hasData={uploadedFiles.length > 0 || mobileTab === 'data'}
               />
           </div>
 
@@ -661,6 +717,21 @@ export default function App() {
               center={selectedCenter} 
               onClose={() => setSelectedCenter(null)} 
           />
+          
+          {showEndSessionConfirm && (
+             <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-enter">
+                <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-slate-100">
+                    <div className="flex flex-col items-center text-center">
+                        <h3 className="text-xl font-bold text-slate-800 mb-2">¿Finalizar Consulta?</h3>
+                        <p className="text-sm text-slate-500 mb-6 leading-relaxed">Se cerrará el chat actual.</p>
+                        <div className="flex gap-3 w-full">
+                            <button onClick={() => setShowEndSessionConfirm(false)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">Cancelar</button>
+                            <button onClick={performReset} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition shadow-lg shadow-red-200">Finalizar</button>
+                        </div>
+                    </div>
+                </div>
+             </div>
+          )}
 
        </main>
     </div>

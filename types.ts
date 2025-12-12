@@ -41,6 +41,7 @@ export interface MedicalCenter {
   operatingHours?: string;
   requirements?: string[];
   website?: string;
+  googleMapsUri?: string;
 }
 
 export interface DoctorMencion {
@@ -69,11 +70,23 @@ export interface Doctor {
   especialidad_principal: string;
 }
 
+export interface RagDocument {
+  id: string;          // Google File Name (files/abc-123)
+  displayName: string; // Original filename
+  uri: string;         // Google URI (https://generativelanguage.googleapis.com/...)
+  mimeType: string;
+  state: 'PROCESSING' | 'ACTIVE' | 'FAILED';
+  sizeBytes: string;
+}
+
 export const INSURANCES = [
-  "Rímac",
-  "Pacífico",
-  "EsSalud",
   "SIS",
+  "EsSalud",
   "Particular",
+  "Pacífico",
+  "Rímac",
+  "Mapfre",
+  "La Positiva",
+  "Sanitas",
   "Sin Seguro"
 ];

@@ -1,10 +1,10 @@
-
 import React from 'react';
 import { TriageAnalysis, UrgencyLevel } from '../types';
 
 interface AnalysisPanelProps {
   analysis: TriageAnalysis;
   onContactDoctor?: () => void;
+  userInsurance?: string;
 }
 
 const getUrgencyColors = (level: UrgencyLevel) => {
@@ -17,11 +17,11 @@ const getUrgencyColors = (level: UrgencyLevel) => {
     }
 }
 
-export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, onContactDoctor }) => {
+export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, onContactDoctor, userInsurance }) => {
   const colors = getUrgencyColors(analysis.urgency);
 
   return (
-    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter">
+    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter min-h-0">
       {/* Header */}
       <div className="px-6 py-5 border-b border-slate-50 bg-blue-50/30 flex justify-between items-center shrink-0">
         <span className="text-sm font-bold text-blue-900 flex items-center gap-2">
@@ -32,7 +32,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, onContac
       </div>
 
       {/* Scrollable Content */}
-      <div className="p-6 overflow-y-auto space-y-6 no-scrollbar flex-1">
+      <div className="p-6 overflow-y-auto space-y-6 no-scrollbar flex-1 min-h-0">
         {/* Specialty */}
         <div className="text-center mt-2">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg shadow-blue-200 mb-3 text-3xl">

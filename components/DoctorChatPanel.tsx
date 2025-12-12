@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Message, Doctor } from '../types';
 
@@ -35,7 +34,7 @@ export const DoctorChatPanel: React.FC<DoctorChatPanelProps> = ({
   };
 
   return (
-    <section className="col-span-12 lg:col-span-4 h-full bg-white/90 backdrop-blur-xl rounded-3xl lg:rounded-[2.5rem] shadow-xl border border-indigo-100 flex flex-col overflow-hidden relative z-20 animate-fade-enter ring-4 ring-indigo-50">
+    <section className="col-span-12 lg:col-span-4 h-full bg-white/90 backdrop-blur-xl rounded-3xl lg:rounded-[2.5rem] shadow-xl border border-indigo-100 flex flex-col overflow-hidden relative z-20 animate-fade-enter ring-4 ring-indigo-50 min-h-0">
       
       {/* Doctor Header */}
       <div className="px-5 py-4 bg-gradient-to-r from-indigo-600 to-blue-600 shrink-0 flex flex-col gap-3 shadow-md relative">
@@ -81,7 +80,7 @@ export const DoctorChatPanel: React.FC<DoctorChatPanelProps> = ({
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-indigo-50/30 no-scrollbar">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-indigo-50/30 no-scrollbar min-h-0">
         <div className="flex justify-center">
             <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-1 rounded-full">
                 Consulta iniciada {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}

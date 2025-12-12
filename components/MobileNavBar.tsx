@@ -2,14 +2,15 @@
 import React from 'react';
 
 interface MobileNavBarProps {
-  activeTab: 'chat' | 'analysis' | 'results' | 'doctor';
-  setActiveTab: (tab: 'chat' | 'analysis' | 'results' | 'doctor') => void;
+  activeTab: 'chat' | 'analysis' | 'results' | 'doctor' | 'data';
+  setActiveTab: (tab: 'chat' | 'analysis' | 'results' | 'doctor' | 'data') => void;
   hasAnalysis: boolean;
   hasResults: boolean;
   hasDoctor: boolean;
+  hasData?: boolean;
 }
 
-export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActiveTab, hasAnalysis, hasResults, hasDoctor }) => {
+export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActiveTab, hasAnalysis, hasResults, hasDoctor, hasData }) => {
   return (
     <div className="lg:hidden w-full h-20 bg-white/95 backdrop-blur-xl rounded-t-[2rem] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] border-t border-slate-100 z-50 flex items-center justify-around px-2 flex-shrink-0">
       
@@ -23,6 +24,7 @@ export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActive
         <span className="text-[10px] font-bold">Chat</span>
       </button>
 
+      {/* Only show Analysis if available */}
       <button 
         onClick={() => hasAnalysis && setActiveTab('analysis')}
         disabled={!hasAnalysis}
@@ -35,6 +37,7 @@ export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActive
         <span className="text-[10px] font-bold">Análisis</span>
       </button>
 
+      {/* Results Tab */}
       <button 
         onClick={() => hasResults && setActiveTab('results')}
         disabled={!hasResults}
@@ -47,7 +50,20 @@ export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActive
         <span className="text-[10px] font-bold">Lugares</span>
       </button>
 
-      {hasDoctor && (
+      {/* Data / RAG Tab (Replaces Doctor if Data is active and Doctor isn't) */}
+      {hasData && (
+        <button 
+            onClick={() => setActiveTab('data')}
+            className={`flex flex-col items-center justify-center w-16 h-full transition-all duration-300 ${activeTab === 'data' ? 'text-violet-600 -translate-y-1' : 'text-slate-400 hover:text-slate-600'}`}
+        >
+            <div className={`p-1.5 rounded-xl mb-0.5 transition-colors ${activeTab === 'data' ? 'bg-violet-100' : 'bg-transparent'} relative`}>
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            </div>
+            <span className="text-[10px] font-bold">Datos</span>
+        </button>
+      )}
+
+      {hasDoctor && !hasData && (
         <button 
             onClick={() => setActiveTab('doctor')}
             className={`flex flex-col items-center justify-center w-16 h-full transition-all duration-300 ${activeTab === 'doctor' ? 'text-indigo-600 -translate-y-1' : 'text-slate-400 hover:text-slate-600'}`}
