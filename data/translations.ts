@@ -129,12 +129,18 @@ export const TRANSLATIONS = {
       disclaimerTitle: 'Aviso Importante',
       disclaimerText: 'Esta herramienta utiliza IA. No es un médico real. La información es solo educativa.',
       understood: 'Entendido, continuar',
-      exitConfirmTitle: '¿Finalizar Asistencia?',
-      exitConfirmText: 'Se cerrará la sesión actual del asistente.',
+      exitConfirmTitle: '¿Salir del Asistente?',
+      exitConfirmText: 'Volverás a los resultados principales.',
       inputPlaceholder: 'Escribe tu consulta...',
       uploadFile: 'Subir examen o foto',
       uploading: 'Subiendo a Gemini...',
-      dragDrop: 'Haz clic o arrastra un archivo'
+      dragDrop: 'Haz clic o arrastra un archivo',
+      experimental: 'IA Experimental • Verifica la info con un médico',
+      filesHint: 'Gestiona tus archivos en Menú ☰ > Mis Datos',
+      capabilitiesTitle: '¿En qué puedo ayudarte?',
+      capability1: '📄 Interpretar resultados de laboratorio (PDF/Foto)',
+      capability2: '💊 Explicar recetas y medicamentos',
+      capability3: '🩺 Segunda opinión sobre síntomas'
     },
     files: {
       myFiles: 'Archivos Personales',
@@ -280,12 +286,18 @@ export const TRANSLATIONS = {
       disclaimerTitle: 'Important Notice',
       disclaimerText: 'This tool uses AI. It is not a real doctor. Information is educational only.',
       understood: 'Understood, continue',
-      exitConfirmTitle: 'End Assistance?',
-      exitConfirmText: 'The current assistant session will close.',
+      exitConfirmTitle: 'Exit Assistant?',
+      exitConfirmText: 'You will return to the main results.',
       inputPlaceholder: 'Type your question...',
       uploadFile: 'Upload test or photo',
       uploading: 'Uploading to Gemini...',
-      dragDrop: 'Click or drag a file'
+      dragDrop: 'Click or drag a file',
+      experimental: 'Experimental AI • Verify info with a doctor',
+      filesHint: 'Manage your files in Menu ☰ > My Data',
+      capabilitiesTitle: 'How can I help you?',
+      capability1: '📄 Interpret lab results (PDF/Photo)',
+      capability2: '💊 Explain prescriptions and meds',
+      capability3: '🩺 Second opinion on symptoms'
     },
     files: {
       myFiles: 'Personal Files',

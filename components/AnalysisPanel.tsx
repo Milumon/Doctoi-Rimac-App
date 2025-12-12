@@ -134,9 +134,22 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, pharmacy
                 )}
             </div>
             
-             <div className="p-3 bg-slate-50 border-t border-slate-100 text-[9px] text-center text-slate-400">
-                {t.pharmacy.disclaimer}
-            </div>
+            {onContactDoctor && (
+                <div className="p-4 bg-white border-t border-slate-50 shrink-0 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
+                    <button 
+                        onClick={onContactDoctor}
+                        className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-200 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
+                    >
+                        <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <span className="text-xl">💬</span>
+                        </div>
+                        <div className="flex flex-col items-start">
+                            <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Dudas Farmacológicas</span>
+                            <span className="text-base font-bold">Consultar Asistente</span>
+                        </div>
+                    </button>
+                </div>
+            )}
         </section>
       );
   }
@@ -208,4 +221,31 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, pharmacy
             <div className="p-4 bg-white border-t border-slate-50 shrink-0 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
                 <button 
                     onClick={onContactDoctor}
-                    className="w-full py-4 bg-gradient-to-r from
+                    className="w-full py-4 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-200 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
+                >
+                    <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <span className="text-xl">✨</span>
+                    </div>
+                    <div className="flex flex-col items-start">
+                        <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">{t.analysis.secondOpinion}</span>
+                        <span className="text-base font-bold">{t.analysis.aiAssistant}</span>
+                    </div>
+                </button>
+            </div>
+        )}
+        </section>
+    );
+  }
+
+  // DEFAULT / DIRECTORY / LOADING
+  return (
+    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex items-center justify-center text-center p-6 min-h-0">
+        <div className="opacity-50">
+            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            </div>
+            <p className="text-sm text-slate-400 font-medium">{t.analysis.waiting}</p>
+        </div>
+    </section>
+  );
+};

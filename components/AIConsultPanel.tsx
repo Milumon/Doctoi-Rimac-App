@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Message, RagDocument } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface AIConsultPanelProps {
   messages: Message[];
@@ -71,6 +72,7 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
   onDeleteFile,
   isUploading
 }) => {
+  const { t } = useLanguage();
   const [input, setInput] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
@@ -107,33 +109,30 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
             <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mb-6">
                 <span className="text-4xl">🤖</span>
             </div>
-            <h2 className="text-2xl font-bold text-slate-800 mb-3">Asistente Virtual IA</h2>
+            <h2 className="text-2xl font-bold text-slate-800 mb-3">{t.assistant.title}</h2>
             <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl text-left mb-6">
                 <h3 className="font-bold text-amber-800 text-sm mb-2 flex items-center gap-2">
-                    ⚠️ Aviso Importante
+                    ⚠️ {t.assistant.disclaimerTitle}
                 </h3>
                 <p className="text-xs text-amber-900/80 leading-relaxed">
-                    Esta herramienta utiliza Inteligencia Artificial para analizar documentos y responder preguntas. 
-                    <strong>No es un médico real.</strong> Puede cometer errores o "alucinar" información.
-                    <br/><br/>
-                    La información proporcionada es solo para fines educativos y de orientación. Nunca reemplaza el juicio clínico de un profesional de la salud.
+                    {t.assistant.disclaimerText}
                 </p>
             </div>
             <button 
                 onClick={() => setAcceptedTerms(true)}
                 className="w-full py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition shadow-lg shadow-indigo-200"
             >
-                Entendido, continuar
+                {t.assistant.understood}
             </button>
 
             {showExitConfirm && (
                 <div className="absolute inset-0 bg-white/95 backdrop-blur-sm z-30 flex items-center justify-center p-4 rounded-[2.5rem]">
                     <div className="bg-white border border-slate-100 shadow-xl p-6 rounded-2xl text-center">
-                         <h4 className="font-bold text-slate-800 mb-2">¿Salir del Asistente?</h4>
-                         <p className="text-xs text-slate-500 mb-4">Volverás a los resultados principales.</p>
+                         <h4 className="font-bold text-slate-800 mb-2">{t.assistant.exitConfirmTitle}</h4>
+                         <p className="text-xs text-slate-500 mb-4">{t.assistant.exitConfirmText}</p>
                          <div className="flex gap-2">
-                             <button onClick={() => setShowExitConfirm(false)} className="flex-1 py-2 text-xs font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-lg">Cancelar</button>
-                             <button onClick={onClose} className="flex-1 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Salir</button>
+                             <button onClick={() => setShowExitConfirm(false)} className="flex-1 py-2 text-xs font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-lg">{t.common.cancel}</button>
+                             <button onClick={onClose} className="flex-1 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">{t.common.exit}</button>
                          </div>
                     </div>
                 </div>
@@ -150,7 +149,7 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
         <button 
             onClick={() => setShowExitConfirm(true)} 
             className="absolute top-4 right-4 text-indigo-100 hover:text-white transition p-1 bg-white/10 rounded-lg"
-            title="Volver"
+            title={t.common.exit}
         >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
         </button>
@@ -164,10 +163,10 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
             </div>
             <div className="flex-1 text-white">
                 <div className="flex items-center gap-2">
-                    <h3 className="font-bold text-base leading-none">Doctoi Asistente</h3>
-                    <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded text-white font-bold">BETA</span>
+                    <h3 className="font-bold text-base leading-none">{t.assistant.title}</h3>
+                    <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded text-white font-bold">{t.common.beta}</span>
                 </div>
-                <p className="text-indigo-100 text-xs mt-1 font-medium">Lectura de Exámenes & Orientación</p>
+                <p className="text-indigo-100 text-xs mt-1 font-medium">{t.assistant.subtitle}</p>
             </div>
         </div>
       </div>
@@ -176,14 +175,35 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50 no-scrollbar min-h-0 relative">
         <div className="flex flex-col items-center gap-2">
             <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-1 rounded-full border border-slate-200">
-                IA Experimental • Verifica la info con un médico
+                {t.assistant.experimental}
             </span>
-            <div className="bg-indigo-50/50 border border-indigo-100 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                 <span className="text-xs">💡</span>
-                 <p className="text-[10px] text-indigo-800 font-medium">
-                    Gestiona tus archivos en Menú <span className="font-bold">☰ &gt; Mis Datos</span>
-                 </p>
-            </div>
+            
+            {/* Intro / Capabilities Block - Shows when chat is empty or just starting */}
+            {messages.length <= 1 && (
+                <div className="bg-white border border-indigo-100 rounded-xl p-4 mt-2 mb-4 w-full shadow-sm animate-fade-enter">
+                    <h4 className="text-xs font-bold text-indigo-800 mb-3 uppercase tracking-wider text-center">{t.assistant.capabilitiesTitle}</h4>
+                    <div className="grid grid-cols-1 gap-2">
+                        <div className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50/50 border border-indigo-50">
+                            <span className="text-lg bg-white shadow-sm p-1.5 rounded-lg border border-indigo-100">📄</span>
+                            <span className="text-xs text-indigo-900 font-medium leading-tight">{t.assistant.capability1}</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50/50 border border-indigo-50">
+                            <span className="text-lg bg-white shadow-sm p-1.5 rounded-lg border border-indigo-100">💊</span>
+                            <span className="text-xs text-indigo-900 font-medium leading-tight">{t.assistant.capability2}</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50/50 border border-indigo-50">
+                            <span className="text-lg bg-white shadow-sm p-1.5 rounded-lg border border-indigo-100">🩺</span>
+                            <span className="text-xs text-indigo-900 font-medium leading-tight">{t.assistant.capability3}</span>
+                        </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-indigo-50 text-center">
+                         <div className="inline-flex items-center gap-1.5 text-[10px] text-indigo-400 bg-indigo-50 px-2 py-1 rounded-lg">
+                             <span className="text-xs">💡</span>
+                             {t.assistant.filesHint}
+                         </div>
+                    </div>
+                </div>
+            )}
         </div>
 
         {messages.map((msg) => (
@@ -220,13 +240,13 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
                      <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-3 text-red-500">
                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
                      </div>
-                     <h4 className="font-bold text-slate-800 mb-2">¿Finalizar Asistencia?</h4>
+                     <h4 className="font-bold text-slate-800 mb-2">{t.assistant.exitConfirmTitle}</h4>
                      <p className="text-xs text-slate-500 mb-5 leading-relaxed">
-                        Se cerrará la sesión actual del asistente y volverás al chat principal.
+                        {t.assistant.exitConfirmText}
                      </p>
                      <div className="flex gap-3">
-                         <button onClick={() => setShowExitConfirm(false)} className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition">Cancelar</button>
-                         <button onClick={onClose} className="flex-1 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-lg shadow-indigo-200">Salir</button>
+                         <button onClick={() => setShowExitConfirm(false)} className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition">{t.common.cancel}</button>
+                         <button onClick={onClose} className="flex-1 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-lg shadow-indigo-200">{t.common.exit}</button>
                      </div>
                 </div>
             </div>
@@ -269,7 +289,7 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
              onClick={() => fileInputRef.current?.click()}
              disabled={isUploading}
              className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center shrink-0 transition"
-             title="Subir examen o foto"
+             title={t.assistant.uploadFile}
           >
              {isUploading ? (
                  <div className="w-4 h-4 rounded-full border-2 border-slate-400 border-t-transparent animate-spin"></div>
@@ -283,7 +303,7 @@ export const AIConsultPanel: React.FC<AIConsultPanelProps> = ({
                 type="text" 
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Escribe tu consulta..."
+                placeholder={t.assistant.inputPlaceholder}
                 className="w-full h-10 pl-4 pr-10 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-slate-700 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition-all text-sm"
                 onKeyDown={handleKeyPress}
               />

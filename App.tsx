@@ -274,14 +274,14 @@ function DoctoiApp() {
       try {
           const newDoc = await uploadFileToGemini(file);
           setUploadedFiles(prev => [...prev, newDoc]);
-          if (isAssistantActive && rightPanelMode === 'assistant') {
+          if (isAssistantActive && (rightPanelMode === 'assistant')) {
               addAssistantMessage(`📎 ${file.name}`, 'user');
           } else if (mobileTab === 'chat' || rightPanelMode !== 'data') {
               addMessage(language === 'es' ? `📂 He recibido el archivo "${file.name}".` : `📂 Received file "${file.name}".`, 'ai');
           }
       } catch (error) {
           const errorMsg = language === 'es' ? "⚠️ Error al subir el archivo." : "⚠️ Error uploading file.";
-          if (isAssistantActive && rightPanelMode === 'assistant') {
+          if (isAssistantActive && (rightPanelMode === 'assistant')) {
               addAssistantMessage(errorMsg, 'ai');
           } else {
               addMessage(errorMsg, 'ai');
@@ -477,7 +477,10 @@ function DoctoiApp() {
               { role: 'user', parts: [{ text: text }] }
           ];
           
-          const contextData = { analysis, pharmacyAnalysis };
+          const contextData = { 
+              analysis, 
+              pharmacyAnalysis
+          };
           
           const response = await generateAssistantResponse(history, uploadedFiles, contextData, language);
           if (sessionRef.current !== currentSession) return;
@@ -593,17 +596,19 @@ function DoctoiApp() {
   const handleSelectInsurance = (ins: string) => { setInsurance(ins); };
   
   const handleContactAssistant = () => {
-      if (!analysis) return;
       setIsAssistantActive(true);
       setMobileTab('doctor');
-      setRightPanelMode('assistant');
-      setIsAssistantTyping(true);
       setAssistantMessages([]);
+      setIsAssistantTyping(true);
+      
+      // Always route to AI Assistant
+      setRightPanelMode('assistant');
+      
       setTimeout(() => {
           setIsAssistantTyping(false);
           const greeting = language === 'es' 
-            ? `Hola. Soy el Asistente Virtual. He revisado tu análisis de ${analysis.specialty}.` 
-            : `Hello. I am the Virtual Assistant. I have reviewed your analysis for ${analysis.specialty}.`;
+            ? `Hola. Soy el Asistente Virtual. ${analysis ? `He revisado tu análisis de ${analysis.specialty}.` : '¿En qué puedo ayudarte?'}` 
+            : `Hello. I am the Virtual Assistant. ${analysis ? `I have reviewed your analysis for ${analysis.specialty}.` : 'How can I help you?'}`;
           addAssistantMessage(greeting, 'ai');
       }, 1000);
   }
