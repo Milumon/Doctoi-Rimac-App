@@ -67,12 +67,13 @@ export interface MedicalCenter {
 }
 
 export interface RagDocument {
-  id: string;          // Google File Name (files/abc-123)
+  id: string;          // Google File Name (files/abc-123) or Local ID
   displayName: string; // Original filename
-  uri: string;         // Google URI (https://generativelanguage.googleapis.com/...)
+  uri: string;         // Google URI or Local URI
   mimeType: string;
   state: 'PROCESSING' | 'ACTIVE' | 'FAILED';
   sizeBytes: string;
+  base64Data?: string; // NEW: Support for local inline data
 }
 
 // NEW: Interface for fixed URLs

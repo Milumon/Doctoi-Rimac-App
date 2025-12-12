@@ -70,75 +70,51 @@ async function callWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000)
 }
 
 // =================================================================
-// 📁 RAG / FILE MANAGEMENT
+// 📁 RAG / FILE MANAGEMENT (CLIENT-SIDE BASE64)
 // =================================================================
 
-export const uploadFileToGemini = async (file: File): Promise<RagDocument> => {
-    return callWithRetry(async () => {
-        try {
-            const response = await ai.files.upload({
-                file: file,
-                config: { displayName: file.name, mimeType: file.type }
-            });
-            return {
-                id: response.name, 
-                displayName: response.displayName || file.name,
-                uri: response.uri,
-                mimeType: response.mimeType,
-                state: response.state as 'PROCESSING' | 'ACTIVE' | 'FAILED',
-                sizeBytes: response.sizeBytes || '0'
-            };
-        } catch (error: any) {
-            if (error.status === 403 || error.message?.includes('PERMISSION_DENIED')) {
-                throw new Error("Tu API Key no tiene permisos para subir archivos.");
-            }
-            throw error;
-        }
+const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => {
+            const result = reader.result as string;
+            // Remove the Data URL prefix (e.g., "data:image/png;base64,")
+            const base64Data = result.split(',')[1];
+            resolve(base64Data);
+        };
+        reader.onerror = error => reject(error);
     });
 };
 
-export const deleteFileFromGemini = async (fileName: string): Promise<void> => {
-    try { 
-        await ai.files.delete({ name: fileName }); 
-    } catch (error: any) { 
-        const msg = error.message?.toLowerCase() || "";
-        const status = error.status || error.code;
-
-        if (
-            status === 404 || 
-            status === 403 || 
-            msg.includes("not found") || 
-            msg.includes("permission denied") ||
-            msg.includes("does not exist")
-        ) {
-            console.log(`ℹ️ Archivo ${fileName} eliminado o inaccesible (Ignorando error API).`);
-            return;
-        }
-        console.warn("Delete failed with unexpected error:", error); 
+export const uploadFileToGemini = async (file: File): Promise<RagDocument> => {
+    // SWITCH TO LOCAL PROCESSING: Avoids CORS/Server issues by keeping data client-side.
+    try {
+        const base64Data = await fileToBase64(file);
+        
+        return {
+            id: `local-${Date.now()}`, 
+            displayName: file.name,
+            uri: URL.createObjectURL(file), // Local blob URI for preview if needed
+            mimeType: file.type,
+            state: 'ACTIVE', // Ready immediately
+            sizeBytes: file.size.toString(),
+            base64Data: base64Data // Store base64 for the API call
+        };
+    } catch (error: any) {
+        throw new Error("Error processing file locally.");
     }
 };
 
+export const deleteFileFromGemini = async (fileName: string): Promise<void> => {
+    // No-op for local files, state is managed in App.tsx
+    return;
+};
+
 export const getActiveFilesFromGemini = async (): Promise<RagDocument[]> => {
-    try {
-        const response = await ai.files.list();
-        const files: RagDocument[] = [];
-        if (response && typeof response[Symbol.asyncIterator] === 'function') {
-             for await (const f of response) {
-                files.push({
-                    id: f.name,
-                    displayName: f.displayName || 'Documento sin nombre',
-                    uri: f.uri,
-                    mimeType: f.mimeType,
-                    state: f.state as 'PROCESSING' | 'ACTIVE' | 'FAILED',
-                    sizeBytes: f.sizeBytes || '0'
-                });
-            }
-        }
-        return files;
-    } catch (error: any) {
-        if (error.status === 403 || error.toString().includes('PERMISSION_DENIED')) return [];
-        return [];
-    }
+    // For local session files, we don't fetch from server. 
+    // Return empty array to rely on App.tsx state.
+    return [];
 };
 
 // Helper to format sources for prompt
@@ -157,13 +133,13 @@ const triageSchema: Schema = {
   type: Type.OBJECT,
   properties: {
     specialty: { type: Type.STRING, description: "Recommended medical specialty" },
-    specialtyDescription: { type: Type.STRING, description: "Short explanation of why this specialty is needed" },
+    specialtyDescription: { type: Type.STRING, description: "Very short explanation (max 10 words)" },
     urgency: { 
       type: Type.STRING, 
       enum: [UrgencyLevel.LOW, UrgencyLevel.MODERATE, UrgencyLevel.HIGH, UrgencyLevel.EMERGENCY],
       description: "Urgency level of the condition"
     },
-    urgencyExplanation: { type: Type.STRING, description: "Why this urgency level was assigned" },
+    urgencyExplanation: { type: Type.STRING, description: "Very short reason (max 10 words)" },
     detectedSymptoms: { 
       type: Type.ARRAY, 
       items: { type: Type.STRING },
@@ -172,7 +148,7 @@ const triageSchema: Schema = {
     advice: { 
       type: Type.ARRAY, 
       items: { type: Type.STRING },
-      description: "Immediate advice or things to avoid before seeing a doctor"
+      description: "Short, actionable advice items (max 8 words each)"
     },
     confidence: { type: Type.NUMBER, description: "Confidence score 0-100. Set to 0 if input is greetings, noise or lacks symptoms." }
   },
@@ -196,22 +172,20 @@ export const analyzeSymptoms = async (
         if (emergencyCheck.isEmergency) {
             return {
                 specialty: isEn ? "Emergency Medicine" : "Medicina de Emergencias",
-                specialtyDescription: isEn ? "Requires immediate attention in ER." : "Requiere atención médica inmediata en sala de urgencias.",
+                specialtyDescription: isEn ? "Requires immediate attention." : "Requiere atención inmediata.",
                 urgency: UrgencyLevel.EMERGENCY,
                 urgencyExplanation: isEn 
-                    ? `Situation detected: ${emergencyCheck.matchedKeywords.join(', ')}. IMMEDIATE ACTION REQUIRED.`
-                    : `Situación detectada: ${emergencyCheck.matchedKeywords.join(', ')}. ACCIÓN INMEDIATA REQUERIDA.`,
+                    ? `Situation detected: ${emergencyCheck.matchedKeywords.join(', ')}.`
+                    : `Detectado: ${emergencyCheck.matchedKeywords.join(', ')}.`,
                 detectedSymptoms: emergencyCheck.matchedKeywords,
                 advice: isEn ? [
                     "🚨 Call 106 (SAMU) NOW",
-                    "Do not move the patient if head/spinal trauma",
-                    "Apply pressure if bleeding",
+                    "Do not move the patient",
                     "Keep patient conscious"
                 ] : [
                     "🚨 Llamar al 106 (SAMU) AHORA",
-                    "No mover al paciente si hay trauma craneal o espinal",
-                    "Si hay hemorragia visible, aplicar presión directa con tela limpia",
-                    "Mantener a la persona consciente hablándole"
+                    "No mover al paciente",
+                    "Mantener a la persona consciente"
                 ],
                 confidence: 100
             };
@@ -220,17 +194,17 @@ export const analyzeSymptoms = async (
         if (emergencyCheck.isSuicidal) {
              return {
                 specialty: isEn ? "Psychiatric Emergency" : "Psiquiatría de Emergencias",
-                specialtyDescription: isEn ? "Mental health crisis requiring urgent intervention." : "Crisis de salud mental que requiere intervención urgente.",
+                specialtyDescription: isEn ? "Mental health crisis." : "Crisis de salud mental.",
                 urgency: UrgencyLevel.EMERGENCY,
-                urgencyExplanation: isEn ? "Life risk due to suicidal ideation." : "Riesgo vital por ideación suicida.",
-                detectedSymptoms: isEn ? ["Suicidal ideation"] : ["Ideación suicida", "Crisis emocional"],
+                urgencyExplanation: isEn ? "Suicidal ideation." : "Ideación suicida.",
+                detectedSymptoms: isEn ? ["Suicidal ideation"] : ["Ideación suicida"],
                 advice: isEn ? [
-                    "🆘 Suicide Prevention Line: 113",
-                    "Do not leave patient alone",
+                    "🆘 Call 113",
+                    "Do not leave alone",
                     "Go to ER"
                 ] : [
-                    "🆘 Línea de prevención suicida: 113 (Ministerio de Salud)",
-                    "No dejar solo al paciente",
+                    "🆘 Llamar al 113 (Minsa)",
+                    "No dejar solo",
                     "Acudir a emergencias"
                 ],
                 confidence: 100
@@ -268,8 +242,11 @@ CRITICAL EMERGENCY DETECTION RULES (HIGHEST PRIORITY):
 2. Phrases like "me desangro", "no puedo respirar", "dolor de pecho intenso" -> urgency: "Emergencia"
 
 STANDARD RULES:
+- BE EXTREMELY CONCISE. Short sentences only.
+- 'specialtyDescription': Max 10 words.
+- 'urgencyExplanation': Max 10 words.
+- 'advice': Max 3 items, max 8 words each.
 - If input is clearly not symptoms (e.g. "Hello", "Weather"), return confidence: 0.
-- For mild symptoms (headache, cold), use "Baja" or "Moderada".
 `;
 
         if (useTools) {
@@ -278,11 +255,11 @@ STANDARD RULES:
             Format:
             {
                 "specialty": "string",
-                "specialtyDescription": "string",
+                "specialtyDescription": "string (very short)",
                 "urgency": "Baja" | "Moderada" | "Alta" | "Emergencia",
-                "urgencyExplanation": "string",
+                "urgencyExplanation": "string (very short)",
                 "detectedSymptoms": ["string"],
-                "advice": ["string"],
+                "advice": ["string (very short)"],
                 "confidence": number
             }`;
         } else {
@@ -306,7 +283,7 @@ STANDARD RULES:
             const resultCheck = detectEmergencyKeywords(result.detectedSymptoms.join(' '), language);
             if (resultCheck.isEmergency && result.urgency !== UrgencyLevel.EMERGENCY) {
                 result.urgency = UrgencyLevel.EMERGENCY;
-                result.urgencyExplanation = isEn ? "High risk symptoms detected." : "Síntomas de alto riesgo detectados.";
+                result.urgencyExplanation = isEn ? "High risk symptoms." : "Síntomas de alto riesgo.";
             }
             
             return result;
@@ -422,7 +399,8 @@ export const analyzeMedications = async (
             
             let config: any = {};
             let systemInstruction = `You are a pharmaceutical assistant.${sourcesContext}
-            Respond in ${outputLang}.`;
+            Respond in ${outputLang}.
+            CRITICAL: Keep 'purpose', 'dosage', 'warnings' VERY CONCISE (max 10-15 words each). Use short bullet-point style sentences.`;
 
             if (useTools) {
                 config.tools = [{googleSearch: {}}];
@@ -431,10 +409,10 @@ export const analyzeMedications = async (
                 Format: [{
                     "name": "string",
                     "activeIngredient": "string",
-                    "dosage": "string",
-                    "purpose": "string",
-                    "warnings": ["string"],
-                    "interactions": ["string"],
+                    "dosage": "string (very concise)",
+                    "purpose": "string (very concise)",
+                    "warnings": ["string (short)"],
+                    "interactions": ["string (short)"],
                     "alternatives": ["string"],
                     "requiresPrescription": boolean,
                     "takenWithFood": "Antes" | "Después" | "Indiferente" | "Con alimentos" | "Before" | "After" | "Indifferent" | "With food"
@@ -627,12 +605,37 @@ export const generateFollowUp = async (
             const sourcesContext = formatSourcesContext(activeSources);
             const outputLang = language === 'en' ? "English" : "Spanish";
             
+            // PREPARE FILE PARTS FOR INLINE DATA
+            const fileParts = activeFiles
+                .filter(f => f.base64Data)
+                .map(f => ({
+                    inlineData: {
+                        mimeType: f.mimeType,
+                        data: f.base64Data as string
+                    }
+                }));
+
+            // If we have files, inject them into the LAST user message or as a new context block
+            let contents = [...history];
+            
+            // If there are files, add them to the latest user part if possible, or append context
+            if (fileParts.length > 0) {
+                 // Simple strategy: Add a "User" message at the end with the images if they aren't already there
+                 // But better: construct the payload properly
+                 const lastMsg = contents[contents.length - 1];
+                 if (lastMsg.role === 'user') {
+                     lastMsg.parts = [...fileParts, ...lastMsg.parts];
+                 } else {
+                     contents.push({ role: 'user', parts: fileParts });
+                 }
+            }
+
             let systemInstruction = `You are Doctoi. Keep responses short and helpful. Respond in ${outputLang}.${sourcesContext}
             IMPORTANT:
             - If user wants to find a place/address, set action="SEARCH_MAPS".
             `;
             
-            if (hasFiles) systemInstruction += ` Use uploaded documents to answer.`;
+            if (hasFiles) systemInstruction += ` Use attached images/documents to answer.`;
 
             let config: any = {};
             if (useTools) {
@@ -653,7 +656,7 @@ export const generateFollowUp = async (
 
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: history,
+                contents: contents,
                 config: config
             });
             
@@ -666,6 +669,7 @@ export const generateFollowUp = async (
                 query: result.query || ""
             };
         } catch (e) { 
+            console.error(e);
             return { text: "Error.", action: "NONE", query: "" }; 
         }
     });
@@ -694,14 +698,51 @@ export const generateAssistantResponse = async (
             TONE: Professional, empathetic, clear, educational. Respond in ${outputLang}.
             `;
 
+            // PREPARE PAYLOAD WITH INLINE DATA FOR FILES
+            // This replaces the old "text-only" reference to files.
+            
+            let contents = [...history];
+
+            // Filter files that have base64 data available
+            const validFiles = activeFiles.filter(f => f.base64Data);
+
+            if (validFiles.length > 0) {
+                 // We attach files to the *last* user message to ensure they are part of the immediate context
+                 let lastMsgIndex = -1;
+                 for (let i = contents.length - 1; i >= 0; i--) {
+                     if (contents[i].role === 'user') {
+                         lastMsgIndex = i;
+                         break;
+                     }
+                 }
+                 
+                 const fileParts = validFiles.map(f => ({
+                    inlineData: {
+                        mimeType: f.mimeType,
+                        data: f.base64Data as string
+                    }
+                 }));
+
+                 if (lastMsgIndex !== -1) {
+                     // Add files to existing last message
+                     contents[lastMsgIndex].parts = [...fileParts, ...contents[lastMsgIndex].parts];
+                 } else {
+                     // Or prepend if no user msg found (rare)
+                     contents.push({ role: 'user', parts: fileParts });
+                 }
+            }
+
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: history,
+                contents: contents,
                 config: {
                      systemInstruction: systemInstruction
                 }
             });
             return response.text || "Error.";
-        } catch (e) { return "Error."; }
+        } catch (e) { 
+            console.error("Assistant Error:", e);
+            return "Error."; 
+        }
     });
 }
