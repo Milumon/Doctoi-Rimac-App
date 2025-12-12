@@ -34,6 +34,52 @@ interface ChatPanelProps {
   isConsultationActive?: boolean;
 }
 
+// === MARKDOWN HELPER COMPONENTS ===
+const parseBold = (text: string) => {
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, index) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+            return <strong key={index} className="font-bold">{part.slice(2, -2)}</strong>;
+        }
+        return part;
+    });
+};
+
+const FormattedMessage: React.FC<{ text: string }> = ({ text }) => {
+    const lines = text.split('\n');
+    return (
+        <div className="space-y-1">
+            {lines.map((line, i) => {
+                const trimmed = line.trim();
+                // Bullet points
+                if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
+                    return (
+                        <div key={i} className="flex items-start gap-2 ml-1">
+                            <span className="text-[10px] mt-1.5 opacity-70">●</span>
+                            <span>{parseBold(trimmed.substring(2))}</span>
+                        </div>
+                    );
+                }
+                // Numbered lists
+                if (/^\d+\.\s/.test(trimmed)) {
+                     const content = trimmed.replace(/^\d+\.\s/, '');
+                     const number = trimmed.match(/^\d+/)?.[0];
+                     return (
+                        <div key={i} className="flex items-start gap-2 ml-1">
+                            <span className="font-bold text-xs mt-0.5 opacity-80">{number}.</span>
+                            <span>{parseBold(content)}</span>
+                        </div>
+                     );
+                }
+                // Empty lines
+                if (!trimmed) return <div key={i} className="h-1"></div>;
+                // Standard text
+                return <p key={i} className="min-h-[1.2em]">{parseBold(line)}</p>;
+            })}
+        </div>
+    );
+};
+
 export const ChatPanel: React.FC<ChatPanelProps> = ({ 
   messages, 
   onSendMessage, 
@@ -84,10 +130,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const { activeDepartments, activeProvinces, activeDistricts } = useMemo(() => {
+  const { activeDistricts } = useMemo(() => {
     return {
-        activeDepartments: DEPARTMENTS,
-        activeProvinces: PROVINCES,
         activeDistricts: DISTRICTS
     };
   }, []);
@@ -142,8 +186,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   };
 
   const isInputDisabled = currentStep === 1.1 || currentStep === 1.2 || currentStep === 2 || isLocationBusy || isConsultationActive;
-  const displayProvinces = activeProvinces.filter(p => p.department_id === selectedDepartmentId);
-  const displayDistricts = activeDistricts.filter(d => d.province_id === selectedProvinceId);
 
   const getPlaceholder = () => {
       if (isRecording) return "Escuchando... (Toca para detener)";
@@ -198,7 +240,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} gap-1 animate-fade-enter`}>
             {msg.type === 'text' && (
               <div className={`${msg.sender === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : (msg.text.includes('⚠️') ? 'bg-amber-100 text-amber-900 border border-amber-200' : 'bg-slate-100 text-slate-700 rounded-tl-none')} py-3 px-4 rounded-2xl max-w-[90%] text-sm shadow-sm leading-relaxed whitespace-pre-line relative ${isConsultationActive ? 'opacity-50' : ''}`}>
-                {msg.text}
+                 {msg.sender === 'user' ? msg.text : <FormattedMessage text={msg.text} />}
               </div>
             )}
 
@@ -226,8 +268,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 </div>
             )}
 
-            {/* SELECTORS (Dept/Prov/Dist/Insurance) - Omitted for brevity (same as previous) */}
-            {msg.type === 'department_selector' && !isConsultationActive && (
+            {/* LOCATION SELECTOR (Direct District) */}
+            {msg.type === 'district_selector' && !isConsultationActive && (
               <div className="w-[90%] mt-2 flex flex-col gap-4">
                  <div className={`relative overflow-hidden p-4 rounded-2xl border transition-all duration-300 ${isLocationBusy ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200 hover:border-blue-200 hover:shadow-md'}`}>
                     <div className="flex items-center gap-4 relative z-10">
@@ -259,28 +301,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     o selecciona manualmente
                     <div className="h-[1px] bg-slate-200 flex-1"></div>
                 </div>
-                <select onChange={(e) => onSelectDepartment(e.target.value)} className="w-full p-3 rounded-xl border border-slate-200 text-sm text-slate-700 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none shadow-sm cursor-pointer appearance-none" defaultValue="">
-                    <option value="" disabled>Selecciona un Departamento...</option>
-                    {activeDepartments.map(d => <option key={d.id} value={d.id}>{d.name.trim()}</option>)}
-                </select>
-              </div>
-            )}
-            {msg.type === 'province_selector' && !isConsultationActive && (
-              <div className="w-[90%] mt-2 flex flex-col gap-3">
-                <select onChange={(e) => onSelectProvince(e.target.value)} className="w-full p-3 rounded-xl border border-slate-200 text-sm text-slate-700 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none shadow-sm cursor-pointer appearance-none" defaultValue="">
-                    <option value="" disabled>Selecciona una Provincia...</option>
-                    {displayProvinces.map(p => <option key={p.id} value={p.id}>{p.name.trim()}</option>)}
-                </select>
-              </div>
-            )}
-            {msg.type === 'district_selector' && !isConsultationActive && (
-              <div className="w-[90%] mt-2 flex flex-col gap-3">
+                
+                {/* Simplified District Selection (Skipping Dept/Prov since it's Lima only) */}
                 <select onChange={(e) => onSelectDistrict(e.target.value)} className="w-full p-3 rounded-xl border border-slate-200 text-sm text-slate-700 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none shadow-sm cursor-pointer appearance-none" defaultValue="">
-                    <option value="" disabled>Selecciona un Distrito...</option>
-                    {displayDistricts.map(d => <option key={d.id} value={d.id}>📍 {d.name.trim()}</option>)}
+                    <option value="" disabled>Selecciona tu Distrito (Lima)...</option>
+                    {activeDistricts.map(d => <option key={d.id} value={d.id}>📍 {d.name.trim()}</option>)}
                 </select>
               </div>
             )}
+
             {msg.type === 'insurance_selector' && !isConsultationActive && (
                 <div className="flex flex-wrap gap-2 mt-2 max-w-[95%]">
                     {INSURANCES.map(ins => (
@@ -355,20 +384,73 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       </div>
 
-      {/* Modals remain unchanged */}
+      {/* ABOUT MODAL (REDESIGNED V2 - VISUAL IDENTITY MATCH) */}
       {showAbout && (
-          <div className="absolute inset-0 z-[50] flex items-center justify-center p-6 bg-slate-900/20 backdrop-blur-sm animate-fade-enter">
-              <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-[90%] h-auto max-h-[90%] overflow-hidden relative flex flex-col">
-                  <div className="p-6 overflow-y-auto no-scrollbar">
-                      <h3 className="text-lg font-bold text-slate-800 mb-2">Acerca de Doctoi</h3>
-                      <p className="text-sm text-slate-600 mb-4">
-                        Doctoi es una demo de IA para triaje y ubicación de servicios de salud en Perú.
-                        Utiliza la tecnología de Google Gemini para analizar síntomas y Google Maps para encontrar lugares.
-                      </p>
-                      <button onClick={() => setShowAbout(false)} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 transition">Entendido</button>
-                  </div>
-              </div>
-          </div>
+        <div className="absolute inset-0 z-[60] flex items-center justify-center p-6 bg-slate-900/20 backdrop-blur-sm animate-fade-enter">
+            <div className="bg-white/95 backdrop-blur-xl rounded-[2rem] shadow-2xl shadow-blue-900/10 border border-white w-full max-w-sm overflow-hidden relative flex flex-col items-center text-center p-8">
+                
+                <button 
+                  onClick={() => setShowAbout(false)} 
+                  className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 transition bg-slate-50 hover:bg-slate-100 rounded-full"
+                >
+                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+
+                {/* VISUAL IDENTITY LOGO (Mini version of Hero) */}
+                <div className="w-24 h-24 mb-6 relative">
+                    <svg width="100%" height="100%" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <defs>
+                          <linearGradient id="about-grad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+                              <stop stopColor="#3B82F6"/> 
+                              <stop offset="1" stopColor="#10B981"/> 
+                          </linearGradient>
+                      </defs>
+                      <circle cx="256" cy="256" r="200" fill="url(#about-grad)" fillOpacity="0.05" />
+                      <circle cx="256" cy="256" r="160" stroke="url(#about-grad)" strokeWidth="4" strokeDasharray="20 20" opacity="0.4" className="animate-[spin_20s_linear_infinite]" />
+                      <path d="M256 120 C 190 120 146 170 146 230 C 146 300 256 420 256 420 C 256 420 366 300 366 230 C 366 170 322 120 256 120 Z" 
+                            fill="url(#about-grad)" 
+                            className="drop-shadow-lg"
+                      />
+                       <path d="M256 190 V 270 M 216 230 H 296" stroke="white" strokeWidth="24" strokeLinecap="round"/>
+                    </svg>
+                </div>
+
+                <h3 className="text-2xl font-bold text-slate-800 tracking-tight mb-1">Doctoi</h3>
+                <p className="text-sm font-medium text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-emerald-500 mb-6 uppercase tracking-wider">
+                    Orientación de Salud
+                </p>
+
+                <p className="text-sm text-slate-500 leading-relaxed mb-6">
+                  Una iniciativa tecnológica para facilitar el acceso a información de salud en Lima. Conectamos síntomas con especialistas y farmacias usando Inteligencia Artificial.
+                </p>
+                
+                <div className="flex flex-wrap justify-center gap-2 mb-6">
+                    <span className="px-3 py-1 bg-slate-50 border border-slate-100 rounded-full text-[10px] font-bold text-slate-600 flex items-center gap-1">
+                        ✨ Gemini 2.5
+                    </span>
+                    <span className="px-3 py-1 bg-slate-50 border border-slate-100 rounded-full text-[10px] font-bold text-slate-600 flex items-center gap-1">
+                        🗺️ Google Maps
+                    </span>
+                </div>
+
+                <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl w-full text-left flex gap-3 mb-6">
+                     <div className="text-xl">⚠️</div>
+                     <div>
+                        <h4 className="text-[10px] font-bold text-amber-800 uppercase tracking-wide mb-0.5">Descargo de Responsabilidad</h4>
+                        <p className="text-[10px] text-amber-700/80 leading-tight">
+                            Los resultados son informativos y no constituyen diagnóstico médico. En caso de emergencia, llama al 106.
+                        </p>
+                     </div>
+                </div>
+
+                <button 
+                  onClick={() => setShowAbout(false)} 
+                  className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition active:scale-95 shadow-lg shadow-slate-200"
+                >
+                    Entendido
+                </button>
+            </div>
+        </div>
       )}
     </section>
   );

@@ -6,6 +6,14 @@ export interface Message {
   type?: 'text' | 'department_selector' | 'province_selector' | 'district_selector' | 'insurance_selector' | 'intent_selector';
 }
 
+export interface MultimodalIntent {
+  intent: 'triage' | 'pharmacy' | 'directory' | 'chat';
+  transcription: string;
+  query: string;
+  detectedLocation?: string;
+  isEmergency: boolean;
+}
+
 export enum UrgencyLevel {
   LOW = 'Baja',
   MODERATE = 'Moderada',
@@ -57,6 +65,26 @@ export interface MedicalCenter {
   has24hER?: boolean; // New field for Emergency logic
 }
 
+export interface RagDocument {
+  id: string;          // Google File Name (files/abc-123)
+  displayName: string; // Original filename
+  uri: string;         // Google URI (https://generativelanguage.googleapis.com/...)
+  mimeType: string;
+  state: 'PROCESSING' | 'ACTIVE' | 'FAILED';
+  sizeBytes: string;
+}
+
+// NEW: Interface for fixed URLs
+export interface KnowledgeSource {
+  id: string;
+  name: string;
+  category: 'Protocolos' | 'Farmacia' | 'Seguros' | 'Directorio';
+  url: string;
+  description: string;
+  isActive: boolean;
+  icon?: string;
+}
+
 export interface DoctorMencion {
   registro: string;
   tipo: string;
@@ -81,26 +109,6 @@ export interface Doctor {
   especialidades_registro: string[];
   tipo_principal: string;
   especialidad_principal: string;
-}
-
-export interface RagDocument {
-  id: string;          // Google File Name (files/abc-123)
-  displayName: string; // Original filename
-  uri: string;         // Google URI (https://generativelanguage.googleapis.com/...)
-  mimeType: string;
-  state: 'PROCESSING' | 'ACTIVE' | 'FAILED';
-  sizeBytes: string;
-}
-
-// NEW: Interface for fixed URLs
-export interface KnowledgeSource {
-  id: string;
-  name: string;
-  category: 'Protocolos' | 'Farmacia' | 'Seguros' | 'Directorio';
-  url: string;
-  description: string;
-  isActive: boolean;
-  icon?: string;
 }
 
 export const INSURANCES = [

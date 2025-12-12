@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Message, Doctor } from '../types';
 
@@ -8,6 +9,52 @@ interface DoctorChatPanelProps {
   onClose: () => void;
   isTyping: boolean;
 }
+
+// === MARKDOWN HELPER COMPONENTS ===
+const parseBold = (text: string) => {
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, index) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+            return <strong key={index} className="font-bold">{part.slice(2, -2)}</strong>;
+        }
+        return part;
+    });
+};
+
+const FormattedMessage: React.FC<{ text: string }> = ({ text }) => {
+    const lines = text.split('\n');
+    return (
+        <div className="space-y-1">
+            {lines.map((line, i) => {
+                const trimmed = line.trim();
+                // Bullet points
+                if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
+                    return (
+                        <div key={i} className="flex items-start gap-2 ml-1">
+                            <span className="text-[10px] mt-1.5 opacity-70">●</span>
+                            <span>{parseBold(trimmed.substring(2))}</span>
+                        </div>
+                    );
+                }
+                // Numbered lists
+                if (/^\d+\.\s/.test(trimmed)) {
+                     const content = trimmed.replace(/^\d+\.\s/, '');
+                     const number = trimmed.match(/^\d+/)?.[0];
+                     return (
+                        <div key={i} className="flex items-start gap-2 ml-1">
+                            <span className="font-bold text-xs mt-0.5 opacity-80">{number}.</span>
+                            <span>{parseBold(content)}</span>
+                        </div>
+                     );
+                }
+                // Empty lines
+                if (!trimmed) return <div key={i} className="h-1"></div>;
+                // Standard text
+                return <p key={i} className="min-h-[1.2em]">{parseBold(line)}</p>;
+            })}
+        </div>
+    );
+};
 
 export const DoctorChatPanel: React.FC<DoctorChatPanelProps> = ({ 
   doctor, 
@@ -96,7 +143,7 @@ export const DoctorChatPanel: React.FC<DoctorChatPanelProps> = ({
                     : 'bg-white text-slate-700 rounded-tl-none border border-indigo-100'
                 }`}
             >
-                {msg.text}
+                {msg.sender === 'user' ? msg.text : <FormattedMessage text={msg.text} />}
             </div>
             <span className="text-[10px] text-slate-400 px-1">
                 {msg.sender === 'user' ? 'Tú' : 'Especialista'}

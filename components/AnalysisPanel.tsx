@@ -204,14 +204,14 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, pharmacy
             <div className="p-4 bg-white border-t border-slate-50 shrink-0 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
                 <button 
                     onClick={onContactDoctor}
-                    className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-200 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
+                    className="w-full py-4 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-200 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
                 >
                     <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                        <span className="text-xl">✨</span>
                     </div>
                     <div className="flex flex-col items-start">
-                        <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Disponible ahora</span>
-                        <span className="text-base font-bold">Consultar Especialista</span>
+                        <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Segunda Opinión</span>
+                        <span className="text-base font-bold">Asistente IA / Exámenes</span>
                     </div>
                 </button>
             </div>

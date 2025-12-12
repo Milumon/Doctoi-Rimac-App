@@ -1,20 +1,19 @@
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { HeroSection } from './components/HeroSection';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { ResultsPanel } from './components/ResultsPanel';
-import { DoctorChatPanel } from './components/DoctorChatPanel';
+import { AIConsultPanel } from './components/AIConsultPanel';
 import { DataPanel } from './components/DataPanel';
 import { DetailModal } from './components/DetailModal';
 import { MobileNavBar } from './components/MobileNavBar';
 import { MobileWelcome } from './components/MobileWelcome'; 
 import { MobileToast, ToastType } from './components/MobileToast';
-import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, Doctor, RagDocument, UrgencyLevel, KnowledgeSource } from './types';
-import { doctors } from './data/doctors';
+import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, RagDocument, UrgencyLevel, KnowledgeSource } from './types';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
 import { OFFICIAL_SOURCES } from './data/knowledgeBase';
-import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyMultimodalIntent, generateDoctorResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
+import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyMultimodalIntent, generateAssistantResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
@@ -49,11 +48,11 @@ export default function App() {
       district: ''
   });
   
-  // DOCTOR CHAT STATE
-  const [doctorMessages, setDoctorMessages] = useState<Message[]>([]);
-  const [isDoctorTyping, setIsDoctorTyping] = useState(false);
-  const [currentDoctor, setCurrentDoctor] = useState<Doctor | null>(null);
-  const [rightPanelMode, setRightPanelMode] = useState<'results' | 'doctor' | 'data'>('results');
+  // VIRTUAL ASSISTANT STATE
+  const [assistantMessages, setAssistantMessages] = useState<Message[]>([]);
+  const [isAssistantTyping, setIsAssistantTyping] = useState(false);
+  const [isAssistantActive, setIsAssistantActive] = useState(false);
+  const [rightPanelMode, setRightPanelMode] = useState<'results' | 'assistant' | 'data'>('results');
   
   // RAG / DATA STATE
   const [uploadedFiles, setUploadedFiles] = useState<RagDocument[]>([]);
@@ -82,8 +81,8 @@ export default function App() {
   const sessionRef = useRef(0);
 
   const [symptomsOrMed, setSymptomsOrMed] = useState(''); 
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
-  const [selectedProvinceId, setSelectedProvinceId] = useState('');
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState('15'); // Default Lima
+  const [selectedProvinceId, setSelectedProvinceId] = useState('1501'); // Default Lima
   
   const [insurance, setInsurance] = useState('Sin Seguro');
   
@@ -209,8 +208,8 @@ export default function App() {
     setMessages(prev => [...prev, { id: (Date.now() + Math.random()).toString(), text: safeText, sender, type }]);
   };
 
-  const addDoctorMessage = (text: string, sender: 'user' | 'doctor') => {
-    setDoctorMessages(prev => [...prev, { id: (Date.now() + Math.random()).toString(), text, sender }]);
+  const addAssistantMessage = (text: string, sender: 'user' | 'ai') => {
+    setAssistantMessages(prev => [...prev, { id: (Date.now() + Math.random()).toString(), text, sender }]);
   };
 
   const handleSelectIntent = (selectedFlow: 'triage' | 'pharmacy' | 'directory') => {
@@ -258,11 +257,19 @@ export default function App() {
       try {
           const newDoc = await uploadFileToGemini(file);
           setUploadedFiles(prev => [...prev, newDoc]);
-          if (mobileTab === 'chat' || rightPanelMode !== 'data') {
+          // Use different feedback based on active panel
+          if (isAssistantActive && rightPanelMode === 'assistant') {
+              addAssistantMessage(`📎 Archivo subido: ${file.name}`, 'user');
+          } else if (mobileTab === 'chat' || rightPanelMode !== 'data') {
               addMessage(`📂 He recibido el archivo "${file.name}". Lo usaré para responder tus preguntas.`, 'ai');
           }
       } catch (error) {
-          addMessage("⚠️ Error al subir el archivo. Inténtalo de nuevo.", 'ai');
+          const errorMsg = "⚠️ Error al subir el archivo. Inténtalo de nuevo.";
+          if (isAssistantActive && rightPanelMode === 'assistant') {
+              addAssistantMessage(errorMsg, 'ai');
+          } else {
+              addMessage(errorMsg, 'ai');
+          }
       } finally {
           setIsUploading(false);
       }
@@ -378,9 +385,9 @@ export default function App() {
                      }
                      setStep(3); 
                  } else {
-                     addMessage("He analizado tus síntomas. Por favor, selecciona tu Departamento para ubicarte:", 'ai');
-                     addMessage('', 'ai', 'department_selector');
-                     setStep(1.1);
+                     addMessage("He analizado tus síntomas. Selecciona tu distrito para buscar clínicas:", 'ai');
+                     addMessage('', 'ai', 'district_selector'); // DIRECT TO DISTRICT
+                     setStep(1.3);
                  }
                  return;
              } catch(e) {}
@@ -398,9 +405,9 @@ export default function App() {
                      addMessage("Información encontrada. Buscando farmacias cercanas...", 'ai');
                      setStep(3);
                 } else {
-                    addMessage("Información encontrada. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
-                    addMessage('', 'ai', 'department_selector');
-                    setStep(1.1);
+                    addMessage("Información encontrada. Para buscar farmacias cercanas, selecciona tu distrito:", 'ai');
+                    addMessage('', 'ai', 'district_selector'); // DIRECT TO DISTRICT
+                    setStep(1.3);
                 }
                 return;
              } catch(e) {}
@@ -451,28 +458,38 @@ export default function App() {
                  setStep(3); 
                  
                  if (!locationState.district && !locationState.coordinates) {
-                     addMessage("Para mostrarte el mapa, necesito tu ubicación.", 'ai', 'department_selector');
+                     addMessage("Para mostrarte el mapa, necesito tu ubicación.", 'ai', 'district_selector');
                  }
              }
         } catch(e) { setIsTyping(false); }
     }
   };
 
-  const handleDoctorSendMessage = async (text: string) => {
-      if (!currentDoctor) return;
+  const handleAssistantSendMessage = async (text: string) => {
       const currentSession = sessionRef.current;
-      addDoctorMessage(text, 'user');
-      setIsDoctorTyping(true);
+      addAssistantMessage(text, 'user');
+      setIsAssistantTyping(true);
       try {
           const history = [
-              ...doctorMessages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })),
+              ...assistantMessages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })),
+              // Append files if they are in the active session for context
+              ...uploadedFiles.map(f => ({ role: 'user', parts: [{ text: `[Archivo Adjunto: ${f.displayName}]` }]})),
               { role: 'user', parts: [{ text: text }] }
           ];
-          const response = await generateDoctorResponse(history, currentDoctor, analysis);
+          
+          const contextData = { analysis, pharmacyAnalysis };
+          
+          const response = await generateAssistantResponse(history, uploadedFiles, contextData);
           if (sessionRef.current !== currentSession) return;
-          setIsDoctorTyping(false);
-          addDoctorMessage(response, 'doctor');
-      } catch (e) { setIsDoctorTyping(false); }
+          setIsAssistantTyping(false);
+          addAssistantMessage(response, 'ai');
+      } catch (e) { setIsAssistantTyping(false); }
+  };
+
+  const handleCloseAssistant = () => {
+    setIsAssistantActive(false);
+    setRightPanelMode('results');
+    setMobileTab('results');
   };
 
   const handleRequestLocation = async () => {
@@ -555,36 +572,17 @@ export default function App() {
   };
 
   const handleSelectDepartment = (deptId: string) => {
-      const deptName = DEPARTMENTS.find(d => d.id === deptId)?.name || '';
-      setSelectedDepartmentId(deptId);
-      addMessage(deptName, 'user');
-      setIsTyping(true);
-      setTimeout(() => {
-          setIsTyping(false);
-          addMessage(`¿En qué provincia de ${deptName} te encuentras?`, 'ai');
-          addMessage('', 'ai', 'province_selector');
-          setStep(1.2);
-      }, 500);
+     // Deprecated for simple Lima flow, but kept for interface compatibility
   };
 
   const handleSelectProvince = (provId: string) => {
-      const provName = PROVINCES.find(p => p.id === provId)?.name || '';
-      setSelectedProvinceId(provId);
-      addMessage(provName, 'user');
-      setIsTyping(true);
-      setTimeout(() => {
-          setIsTyping(false);
-          addMessage(`¿Y en qué distrito?`, 'ai');
-          addMessage('', 'ai', 'district_selector');
-          setStep(1.3);
-      }, 500);
+     // Deprecated for simple Lima flow, but kept for interface compatibility
   };
 
   const handleSelectDistrict = (distId: string) => {
       const dist = DISTRICTS.find(d => d.id === distId);
-      const dept = DEPARTMENTS.find(d => d.id === selectedDepartmentId);
-      const prov = PROVINCES.find(p => p.id === selectedProvinceId);
-      const fullLocation = `${dist?.name}, ${prov?.name}, ${dept?.name}`;
+      // Hardcode Lima for visual context since we skipped selection
+      const fullLocation = `${dist?.name}, Lima, Lima`;
       
       setLocationState({
           status: 'success',
@@ -604,22 +602,22 @@ export default function App() {
   };
 
   const handleSelectInsurance = (ins: string) => { setInsurance(ins); };
-  const handleContactDoctor = () => {
+  
+  const handleContactAssistant = () => {
       if (!analysis) return;
-      const bestMatch = doctors.find(d => d.especialidad_principal.toLowerCase().includes(analysis.specialty.toLowerCase())) || doctors[0];
-      setCurrentDoctor(bestMatch);
-      setMobileTab('doctor');
-      setRightPanelMode('doctor');
-      setIsDoctorTyping(true);
-      setDoctorMessages([]);
+      setIsAssistantActive(true);
+      setMobileTab('doctor'); // Use 'doctor' tab key for Assistant view on mobile
+      setRightPanelMode('assistant');
+      setIsAssistantTyping(true);
+      setAssistantMessages([]);
       setTimeout(() => {
-          setIsDoctorTyping(false);
-          const doctorGreeting = `Hola, soy el Dr. ${bestMatch.apellido_paterno}. He revisado tu pre-diagnóstico de ${analysis.specialty}. Para brindarte una mejor orientación, ¿podrías decirme desde cuándo presentas estos síntomas?`;
-          addDoctorMessage(doctorGreeting, 'doctor');
-      }, 1500);
+          setIsAssistantTyping(false);
+          const greeting = `Hola. Soy el Asistente Virtual de Doctoi. He revisado tu pre-análisis de ${analysis.specialty}. Si tienes exámenes de laboratorio o recetas, puedes subirlos aquí para orientarte mejor.`;
+          addAssistantMessage(greeting, 'ai');
+      }, 1000);
   }
 
-  const handleReset = () => { if (currentDoctor) setShowEndSessionConfirm(true); else performReset(); };
+  const handleReset = () => { if (isAssistantActive) setShowEndSessionConfirm(true); else performReset(); };
 
   const performReset = () => {
       sessionRef.current += 1; 
@@ -630,8 +628,8 @@ export default function App() {
           { id: `welcome-2-${Date.now()}`, text: '', sender: 'ai', type: 'intent_selector' }
       ]);
       setSymptomsOrMed('');
-      setSelectedDepartmentId('');
-      setSelectedProvinceId('');
+      setSelectedDepartmentId('15');
+      setSelectedProvinceId('1501');
       
       setLocationState({ status: 'idle', coordinates: null, district: '' });
       
@@ -643,8 +641,12 @@ export default function App() {
       setUnreadAnalysis(false);
       setUnreadResults(false);
       setIsTyping(false);
-      setCurrentDoctor(null);
-      setDoctorMessages([]);
+      
+      // Reset Assistant
+      setIsAssistantActive(false);
+      setAssistantMessages([]);
+      setIsAssistantTyping(false);
+
       setRightPanelMode('results');
       setShowEndSessionConfirm(false);
       setUploadedFiles([]); 
@@ -659,7 +661,7 @@ export default function App() {
 
   const hasAnalysis = !!analysis || !!pharmacyAnalysis;
   const hasResults = step === 3;
-  const hasDoctor = !!currentDoctor;
+  const hasAssistant = isAssistantActive;
   const hasData = uploadedFiles.length > 0 || rightPanelMode === 'data';
 
   const showAnalysisPanel = rightPanelMode !== 'data' && flow !== 'directory';
@@ -724,7 +726,7 @@ export default function App() {
                  selectedDepartmentId={selectedDepartmentId}
                  selectedProvinceId={selectedProvinceId}
                  flow={flow}
-                 isConsultationActive={!!currentDoctor}
+                 isConsultationActive={isAssistantActive}
              />
              
              {step < 3 && rightPanelMode !== 'data' ? (
@@ -736,7 +738,7 @@ export default function App() {
                             analysis={analysis} 
                             pharmacyData={pharmacyAnalysis}
                             flow={flow}
-                            onContactDoctor={handleContactDoctor} 
+                            onContactDoctor={handleContactAssistant} 
                             userInsurance={insurance} 
                         />
                      )}
@@ -760,13 +762,16 @@ export default function App() {
                                 triageUrgency={analysis?.urgency} 
                             />
                          )}
-                         {rightPanelMode === 'doctor' && currentDoctor && (
-                             <DoctorChatPanel 
-                                doctor={currentDoctor}
-                                messages={doctorMessages}
-                                onSendMessage={handleDoctorSendMessage}
-                                onClose={() => setRightPanelMode('results')}
-                                isTyping={isDoctorTyping}
+                         {rightPanelMode === 'assistant' && (
+                             <AIConsultPanel 
+                                messages={assistantMessages}
+                                onSendMessage={handleAssistantSendMessage}
+                                onClose={handleCloseAssistant}
+                                isTyping={isAssistantTyping}
+                                uploadedFiles={uploadedFiles}
+                                onUploadFile={handleUploadFile}
+                                onDeleteFile={handleDeleteFile}
+                                isUploading={isUploading}
                              />
                          )}
                          {rightPanelMode === 'data' && (
@@ -809,7 +814,7 @@ export default function App() {
                             selectedDepartmentId={selectedDepartmentId}
                             selectedProvinceId={selectedProvinceId}
                             flow={flow}
-                            isConsultationActive={!!currentDoctor}
+                            isConsultationActive={isAssistantActive}
                         />
                   </div>
                   
@@ -819,7 +824,7 @@ export default function App() {
                                 analysis={analysis} 
                                 pharmacyData={pharmacyAnalysis}
                                 flow={flow}
-                                onContactDoctor={handleContactDoctor} 
+                                onContactDoctor={handleContactAssistant} 
                                 userInsurance={insurance} 
                             />
                       </div>
@@ -846,15 +851,18 @@ export default function App() {
                        </div>
                   )}
 
-                  {hasDoctor && currentDoctor && (
+                  {hasAssistant && (
                         <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'doctor' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
-                            <DoctorChatPanel 
-                                doctor={currentDoctor}
-                                messages={doctorMessages}
-                                onSendMessage={handleDoctorSendMessage}
-                                onClose={() => setMobileTab('results')}
-                                isTyping={isDoctorTyping}
-                            />
+                             <AIConsultPanel 
+                                messages={assistantMessages}
+                                onSendMessage={handleAssistantSendMessage}
+                                onClose={handleCloseAssistant}
+                                isTyping={isAssistantTyping}
+                                uploadedFiles={uploadedFiles}
+                                onUploadFile={handleUploadFile}
+                                onDeleteFile={handleDeleteFile}
+                                isUploading={isUploading}
+                             />
                         </div>
                   )}
 
@@ -877,7 +885,7 @@ export default function App() {
                 setActiveTab={setMobileTab} 
                 hasAnalysis={!!analysis || !!pharmacyAnalysis}
                 hasResults={step === 3}
-                hasDoctor={hasDoctor}
+                hasDoctor={hasAssistant}
                 hasData={uploadedFiles.length > 0 || mobileTab === 'data'}
                 unreadAnalysis={unreadAnalysis}
                 unreadResults={unreadResults}

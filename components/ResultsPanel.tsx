@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { MedicalCenter, INSURANCES, UrgencyLevel } from '../types';
-import { DEPARTMENTS, PROVINCES, DISTRICTS } from '../data/ubigeo';
+import { DISTRICTS } from '../data/ubigeo';
 
 // Define LocationState locally or import if you extract it to types.ts later
 interface LocationState {
@@ -46,17 +46,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
 }) => {
   
   const [isManualLocationMode, setIsManualLocationMode] = useState(false);
-  const [selectedDeptId, setSelectedDeptId] = useState('');
-  const [selectedProvId, setSelectedProvId] = useState('');
   
-  const { activeDepartments, displayProvinces, displayDistricts } = useMemo(() => {
-    return {
-        activeDepartments: DEPARTMENTS,
-        displayProvinces: PROVINCES.filter(p => p.department_id === selectedDeptId),
-        displayDistricts: DISTRICTS.filter(d => d.province_id === selectedProvId)
-    };
-  }, [selectedDeptId, selectedProvId]);
-
   const headerColor = flow === 'pharmacy' ? 'blue' : (flow === 'directory' ? 'indigo' : 'emerald');
   const isEmergency = triageUrgency === UrgencyLevel.EMERGENCY || triageUrgency === UrgencyLevel.HIGH;
   
@@ -211,44 +201,23 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                     ) : (
                         <div className="w-full space-y-3 bg-slate-50 p-4 rounded-2xl text-left animate-fade-enter">
                              <div className="flex justify-between items-center mb-2">
-                                 <span className="text-xs font-bold text-slate-400 uppercase">Selección Manual</span>
+                                 <span className="text-xs font-bold text-slate-400 uppercase">Selección Manual (Lima)</span>
                                  <button onClick={() => setIsManualLocationMode(false)} className="text-xs text-blue-600 font-bold hover:underline">Cancelar</button>
                              </div>
                              
-                             <select 
-                                value={selectedDeptId}
-                                onChange={(e) => setSelectedDeptId(e.target.value)}
-                                className="w-full p-2.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-blue-400 bg-white"
-                             >
-                                <option value="">Departamento</option>
-                                {activeDepartments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                             </select>
-
-                             <select 
-                                value={selectedProvId}
-                                onChange={(e) => setSelectedProvId(e.target.value)}
-                                disabled={!selectedDeptId}
-                                className="w-full p-2.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-blue-400 bg-white disabled:opacity-50"
-                             >
-                                <option value="">Provincia</option>
-                                {displayProvinces.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                             </select>
-
+                             {/* Simplified District Selector */}
                              <select 
                                 onChange={(e) => {
                                     const dist = DISTRICTS.find(d => d.id === e.target.value);
-                                    const dept = DEPARTMENTS.find(d => d.id === selectedDeptId);
-                                    const prov = PROVINCES.find(p => p.id === selectedProvId);
-                                    
-                                    if (dist && onSetLocation && dept && prov) {
-                                        onSetLocation(`${dist.name}, ${prov.name}, ${dept.name}`);
+                                    if (dist && onSetLocation) {
+                                        onSetLocation(`${dist.name}, Lima, Lima`);
                                     }
                                 }}
-                                disabled={!selectedProvId}
-                                className="w-full p-2.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-blue-400 bg-white disabled:opacity-50"
+                                className="w-full p-2.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-blue-400 bg-white"
+                                defaultValue=""
                              >
-                                <option value="">Distrito</option>
-                                {displayDistricts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                                <option value="" disabled>Selecciona tu Distrito...</option>
+                                {DISTRICTS.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                              </select>
                         </div>
                     )}

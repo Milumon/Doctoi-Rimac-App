@@ -1,9 +1,14 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { TriageAnalysis, UrgencyLevel, Doctor, RagDocument, MedicalCenter, MedicineInfo, KnowledgeSource } from '../types';
+import { TriageAnalysis, UrgencyLevel, RagDocument, MedicalCenter, MedicineInfo, KnowledgeSource, MultimodalIntent } from '../types';
 
 // Initialize Gemini AI
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+//Helper to clean Markdown JSON
+const cleanJsonResponse = (text: string): string => {
+    return text.replace(/```json\n?|```/g, '').trim();
+};
 
 // =================================================================
 // 🚨 LEVEL 1: HARD-CODED EMERGENCY DETECTION (NO AI NEEDED)
@@ -82,7 +87,28 @@ export const uploadFileToGemini = async (file: File): Promise<RagDocument> => {
 };
 
 export const deleteFileFromGemini = async (fileName: string): Promise<void> => {
-    try { await ai.files.delete({ name: fileName }); } catch (error) { console.warn("Delete failed", error); }
+    try { 
+        await ai.files.delete({ name: fileName }); 
+    } catch (error: any) { 
+        // Logic for idempotency:
+        // If it was already deleted (404) or we don't have permission (403 - often means it's gone/expired),
+        // we ignore it to ensure the UI can proceed with the "visual" deletion.
+        const msg = error.message?.toLowerCase() || "";
+        const status = error.status || error.code;
+
+        if (
+            status === 404 || 
+            status === 403 || 
+            msg.includes("not found") || 
+            msg.includes("permission denied") ||
+            msg.includes("does not exist")
+        ) {
+            console.log(`ℹ️ Archivo ${fileName} eliminado o inaccesible (Ignorando error API).`);
+            return;
+        }
+        
+        console.warn("Delete failed with unexpected error:", error); 
+    }
 };
 
 export const getActiveFilesFromGemini = async (): Promise<RagDocument[]> => {
@@ -157,7 +183,6 @@ export const analyzeSymptoms = async (
         const emergencyCheck = detectEmergencyKeywords(textToCheck);
         
         if (emergencyCheck.isEmergency) {
-            console.warn("🚨 EMERGENCY DETECTED VIA KEYWORDS:", emergencyCheck.matchedKeywords);
             return {
                 specialty: "Medicina de Emergencias",
                 specialtyDescription: "Requiere atención médica inmediata en sala de urgencias.",
@@ -175,7 +200,6 @@ export const analyzeSymptoms = async (
         }
 
         if (emergencyCheck.isSuicidal) {
-            console.warn("⚠️ SUICIDAL IDEATION DETECTED:", emergencyCheck.matchedKeywords);
             return {
                 specialty: "Psiquiatría de Emergencias",
                 specialtyDescription: "Crisis de salud mental que requiere intervención urgente.",
@@ -195,6 +219,7 @@ export const analyzeSymptoms = async (
         // 🤖 LEVEL 2: AI Analysis
         let contents: any;
         const sourcesContext = formatSourcesContext(activeSources);
+        const useTools = activeSources.length > 0;
 
         if (typeof input === 'string') {
             contents = `Analyze the following symptoms for INFORMATIONAL PURPOSES ONLY. Not a medical diagnosis. 
@@ -207,40 +232,59 @@ export const analyzeSymptoms = async (
                 ]
             };
         }
-
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: contents,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: triageSchema,
-            // Enable Search Grounding to verify against knowledge base
-            tools: activeSources.length > 0 ? [{googleSearch: {}}] : undefined,
-            systemInstruction: `You are a triage assistant for Peru.${sourcesContext}
+        
+        // DYNAMIC CONFIG: Mutually exclusive properties
+        let config: any = {};
+        
+        // Base system instruction
+        let systemInstruction = `You are a triage assistant for Peru.${sourcesContext}
 
 CRITICAL EMERGENCY DETECTION RULES (HIGHEST PRIORITY):
 1. ANY mention of: bleeding heavily, hemorrhage, stabbing, gunshot, severe burns, unconscious, not breathing, choking, seizure, severe chest pain, stroke symptoms -> ALWAYS return urgency: "Emergencia"
 2. Phrases like "me desangro", "no puedo respirar", "dolor de pecho intenso", "convulsionando" -> urgency: "Emergencia"
-3. If user says "¿dónde?" after describing severe symptoms, treat it as confirmation of emergency, not a question.
 
-PSYCHIATRIC EMERGENCY:
-- If user says "me voy a matar", "no quiero vivir", "me quiero suicidar" -> urgency: "Emergencia", specialty: "Psiquiatría de Emergencias"
-
-STANDARD RULES (if not emergency):
-- Return valid JSON.
+STANDARD RULES:
 - If input is clearly not symptoms (e.g. "Hello", "Weather"), return confidence: 0.
 - For mild symptoms (headache, cold), use "Baja" or "Moderada".
-- Use the Official Knowledge Base to refine advice if applicable.`
-          }
+- Use the Official Knowledge Base to refine advice if applicable.
+`;
+
+        if (useTools) {
+            // FIX: If using tools, CANNOT use responseMimeType: "application/json"
+            config.tools = [{googleSearch: {}}];
+            // We append the JSON requirement to the prompt instead
+            systemInstruction += `\nIMPORTANT: You must output strictly valid JSON. 
+            Format:
+            {
+                "specialty": "string",
+                "specialtyDescription": "string",
+                "urgency": "Baja" | "Moderada" | "Alta" | "Emergencia",
+                "urgencyExplanation": "string",
+                "detectedSymptoms": ["string"],
+                "advice": ["string"],
+                "confidence": number
+            }`;
+        } else {
+            // If NO tools, we can safely use the strict JSON mode
+            config.responseMimeType = "application/json";
+            config.responseSchema = triageSchema;
+        }
+
+        config.systemInstruction = systemInstruction;
+
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: contents,
+          config: config
         });
 
         if (response.text) {
-            const result = JSON.parse(response.text) as TriageAnalysis;
+            const cleanText = cleanJsonResponse(response.text);
+            const result = JSON.parse(cleanText) as TriageAnalysis;
             
             // 🛡️ POST-PROCESSING: Force emergency if AI missed it
             const resultCheck = detectEmergencyKeywords(result.detectedSymptoms.join(' '));
             if (resultCheck.isEmergency && result.urgency !== UrgencyLevel.EMERGENCY) {
-                console.warn("⚠️ AI MISSED EMERGENCY. Overriding to Emergency.");
                 result.urgency = UrgencyLevel.EMERGENCY;
                 result.urgencyExplanation = "Síntomas de alto riesgo detectados. Atención inmediata necesaria.";
             }
@@ -270,16 +314,8 @@ STANDARD RULES (if not emergency):
 };
 
 // =================================================================
-// 🎯 INTENT CLASSIFICATION (ENHANCED)
+// 🎯 INTENT CLASSIFICATION
 // =================================================================
-
-export interface MultimodalIntent {
-    intent: 'triage' | 'pharmacy' | 'directory' | 'chat';
-    transcription: string;
-    query: string;
-    detectedLocation?: string;
-    isEmergency?: boolean; // NEW: Flag for emergency
-}
 
 export const classifyMultimodalIntent = async (input: string | { mimeType: string, data: string }): Promise<MultimodalIntent> => {
     return callWithRetry(async () => {
@@ -378,38 +414,61 @@ export const analyzeMedications = async (
     return callWithRetry(async () => {
         try {
             const sourcesContext = formatSourcesContext(activeSources);
+            const useTools = activeSources.length > 0;
             
+            let config: any = {};
+            let systemInstruction = `You are a pharmaceutical assistant.${sourcesContext}`;
+
+            if (useTools) {
+                config.tools = [{googleSearch: {}}];
+                // Manual JSON enforcement via prompt
+                systemInstruction += `\nIMPORTANT: Return strictly valid JSON array.
+                Format: [{
+                    "name": "string",
+                    "activeIngredient": "string",
+                    "dosage": "string",
+                    "purpose": "string",
+                    "warnings": ["string"],
+                    "interactions": ["string"],
+                    "alternatives": ["string"],
+                    "requiresPrescription": boolean,
+                    "takenWithFood": "Antes" | "Después" | "Indiferente" | "Con alimentos"
+                }]`;
+            } else {
+                config.responseMimeType = "application/json";
+                config.responseSchema = {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            name: { type: Type.STRING },
+                            activeIngredient: { type: Type.STRING },
+                            dosage: { type: Type.STRING },
+                            purpose: { type: Type.STRING },
+                            warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
+                            interactions: { type: Type.ARRAY, items: { type: Type.STRING } },
+                            alternatives: { type: Type.ARRAY, items: { type: Type.STRING } },
+                            requiresPrescription: { type: Type.BOOLEAN },
+                            takenWithFood: { type: Type.STRING, enum: ["Antes", "Después", "Indiferente", "Con alimentos"] }
+                        }
+                    }
+                };
+            }
+            config.systemInstruction = systemInstruction;
+
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
                 contents: `Analyze the medication(s) mentioned in: "${text}". 
                 If multiple meds are found, return a list.
                 Provide usage, dosage (general advice only), warnings, and if prescription is needed in Peru. Spanish.
                 ${sourcesContext ? `Consult the Official Knowledge Base via Google Search if necessary.` : ''}`,
-                config: {
-                    responseMimeType: "application/json",
-                    tools: activeSources.length > 0 ? [{googleSearch: {}}] : undefined,
-                    systemInstruction: `You are a pharmaceutical assistant.${sourcesContext}`,
-                    responseSchema: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                name: { type: Type.STRING },
-                                activeIngredient: { type: Type.STRING },
-                                dosage: { type: Type.STRING },
-                                purpose: { type: Type.STRING },
-                                warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                interactions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                alternatives: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                requiresPrescription: { type: Type.BOOLEAN },
-                                takenWithFood: { type: Type.STRING, enum: ["Antes", "Después", "Indiferente", "Con alimentos"] }
-                            }
-                        }
-                    }
-                }
+                config: config
             });
-            return JSON.parse(response.text || "[]") as MedicineInfo[];
+            
+            const cleanText = cleanJsonResponse(response.text || "[]");
+            return JSON.parse(cleanText) as MedicineInfo[];
         } catch (e) {
+            console.error("Medication analysis failed", e);
             return [{
                 name: "Medicamento",
                 activeIngredient: "Desconocido",
@@ -589,6 +648,7 @@ export const generateFollowUp = async (
     return callWithRetry(async () => {
         try {
             const hasFiles = activeFiles.length > 0;
+            const useTools = activeSources.length > 0;
             const sourcesContext = formatSourcesContext(activeSources);
             
             let systemInstruction = `You are Doctoi. Keep responses short and helpful. Spanish.${sourcesContext}
@@ -600,26 +660,32 @@ export const generateFollowUp = async (
             
             if (hasFiles) systemInstruction += ` Use uploaded documents to answer.`;
 
+            let config: any = {};
+            if (useTools) {
+                config.tools = [{googleSearch: {}}];
+                systemInstruction += `\nReturn strictly valid JSON: {"text": "string", "action": "SEARCH_MAPS" | "NONE", "query": "string"}`;
+            } else {
+                config.responseMimeType = "application/json";
+                config.responseSchema = {
+                    type: Type.OBJECT,
+                    properties: {
+                        text: { type: Type.STRING },
+                        action: { type: Type.STRING, enum: ["SEARCH_MAPS", "NONE"] },
+                        query: { type: Type.STRING }
+                    }
+                };
+            }
+            config.systemInstruction = systemInstruction;
+
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
                 contents: history,
-                config: { 
-                    systemInstruction,
-                    // Use tools if we have active official sources OR location is needed (but Search is better for sources)
-                    tools: activeSources.length > 0 ? [{googleSearch: {}}] : undefined,
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            text: { type: Type.STRING },
-                            action: { type: Type.STRING, enum: ["SEARCH_MAPS", "NONE"] },
-                            query: { type: Type.STRING }
-                        }
-                    }
-                }
+                config: config
             });
             
-            const result = JSON.parse(response.text || "{}");
+            const cleanText = cleanJsonResponse(response.text || "{}");
+            const result = JSON.parse(cleanText);
+            
             return {
                 text: result.text || "No pude procesar eso.",
                 action: result.action || "NONE",
@@ -631,17 +697,54 @@ export const generateFollowUp = async (
     });
 }
 
-export const generateDoctorResponse = async (history: any[], doctor: Doctor, triageContext: any): Promise<string> => {
+// ================= VIRTUAL ASSISTANT (LEGAL-SAFE) =================
+
+export const generateAssistantResponse = async (
+    history: any[], 
+    activeFiles: RagDocument[] = [],
+    context: any
+): Promise<string> => {
     return callWithRetry(async () => {
         try {
+            const systemInstruction = `
+            ROLE: You are "Doctoi Asistente", a Virtual Health Assistant powered by AI.
+            CONTEXT: The user has completed a triage. Context: ${JSON.stringify(context)}.
+            
+            FORMAT RULES (CRITICAL):
+            1. BE CONCISE: Avoid long paragraphs. Use bullet points for lists.
+            2. DIRECTNESS: Get straight to the answer. Avoid fluff like "That is an excellent question".
+            3. LENGTH: Keep responses under 150 words unless specifically asked for a detailed explanation.
+            4. STRUCTURE: Use bold text for key terms.
+
+            LEGAL SAFETY PROTOCOLS (STRICT):
+            1. NEVER claim to be a doctor, physician, or medical professional.
+            2. NEVER provide a definitive diagnosis. Use phrases like "results suggest", "compatible with", "could indicate".
+            3. NEVER prescribe medication or alter dosage.
+            4. ALWAYS include a disclaimer if the question is complex: "I am an AI, this is educational information. Please consult a doctor."
+
+            CAPABILITIES:
+            - You can analyze uploaded documents (PDFs, Images) if they are in the history.
+            - If the user uploads a lab result, explain the abnormal values in simple terms.
+            - If the user uploads a prescription, explain what the medicines are for.
+            
+            TONE: Professional, empathetic, clear, educational, and direct. Spanish.
+            `;
+
+            // Prepare multimodal content if files exist in the latest turn (this logic assumes files are passed via implicit history or specialized prompts, 
+            // but for this function, we assume 'history' already contains the multimodal parts if constructed correctly by the caller,
+            // OR we append files to the latest user message here if they are "active" for the session).
+            
+            // NOTE: In this architecture, the Caller (App.tsx) constructs the history with file parts. 
+            // So we just pass history through.
+
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
                 contents: history,
                 config: {
-                     systemInstruction: `You are Dr. ${doctor.apellido_paterno}, specialist in ${doctor.especialidad_principal}. Context: ${JSON.stringify(triageContext)}.`
+                     systemInstruction: systemInstruction
                 }
             });
-            return response.text || "Error de conexión.";
-        } catch (e) { return "Error de conexión."; }
+            return response.text || "No pude generar una respuesta.";
+        } catch (e) { return "Error al consultar al asistente."; }
     });
 }
