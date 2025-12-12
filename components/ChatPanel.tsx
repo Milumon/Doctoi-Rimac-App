@@ -392,7 +392,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
         <div className="relative group flex gap-2">
             {/* MIC BUTTON */}
-            {flow !== 'directory' && !isConsultationActive && (
+            {!isConsultationActive && (
                 <button 
                     onClick={isRecording ? stopRecording : startRecording}
                     disabled={isInputDisabled}

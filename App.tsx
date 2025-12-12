@@ -11,7 +11,7 @@ import { MobileWelcome } from './components/MobileWelcome';
 import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, Doctor, RagDocument } from './types';
 import { doctors } from './data/doctors';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
-import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyUserIntent, generateDoctorResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
+import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyMultimodalIntent, generateDoctorResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
@@ -175,9 +175,10 @@ export default function App() {
   const handleSelectIntent = (selectedFlow: 'triage' | 'pharmacy' | 'directory') => {
       const currentSession = sessionRef.current;
       
-      // === RESET STATE to prevent old data from appearing ===
+      // === RESET STATE PARTIALLY (Keep Location) ===
       setFlow(selectedFlow);
-      setLocationState({ status: 'idle', coordinates: null, district: '' });
+      // NOTE: We do NOT reset locationState here anymore
+      // setLocationState({ status: 'idle', coordinates: null, district: '' });
       setDynamicCenters([]);     
       setAnalysis(null);
       setPharmacyAnalysis(null);         
@@ -236,118 +237,169 @@ export default function App() {
       setMobileTab('data');
   }
 
+  // ===================== REFACTORED: MULTIMODAL ROUTER & ACTION HANDLER =====================
   const handleSendMessage = async (text: string, audio?: { mimeType: string, data: string }) => {
     const currentSession = sessionRef.current;
     
+    // --- 1. UI FEEDBACK ---
     if (audio) {
-        addMessage("🎤 [Audio Recibido]", 'user');
+        setIsTyping(true);
     } else {
         addMessage(text, 'user');
+        setIsTyping(true);
     }
     
-    setIsTyping(true);
-
-    // STEP 0: INTELLIGENT CLASSIFICATION (Fallback logic for free text input)
-    if (step === 0) {
-        const detectedIntent = await classifyUserIntent(text);
+    // --- 2. MULTIMODAL CLASSIFICATION ROUTER ---
+    // Runs if: Audio input OR Free Text Input at Start (Step 0)
+    if (audio || step === 0) {
+        const input = audio ? audio : text;
+        const result = await classifyMultimodalIntent(input);
+        
         if (sessionRef.current !== currentSession) return;
 
-        // Force reset on intent change
-        setFlow(detectedIntent);
-        setSymptomsOrMed(text); 
-        setMobileTab('chat');
-        setLocationState({ status: 'idle', coordinates: null, district: '' });
-        setDynamicCenters([]);
-        setAnalysis(null); 
-        setPharmacyAnalysis(null);
+        // If audio, show what the AI heard
+        if (audio) {
+            addMessage(`🎤 "${result.transcription}"`, 'user');
+        }
 
-        if (detectedIntent === 'triage') {
+        // Apply Global Reset on Intent Change
+        setFlow(result.intent as any); 
+        setSymptomsOrMed(result.query || result.transcription);
+        setMobileTab('chat');
+        setDynamicCenters([]);
+        setAnalysis(null);
+        setPharmacyAnalysis(null);
+        
+        // ** LOCATION HANDLING **
+        // If the AI detected a location in the voice/text (e.g., "in San Borja"), update state
+        if (result.detectedLocation) {
+             setLocationState({
+                 status: 'success',
+                 district: result.detectedLocation,
+                 coordinates: null
+             });
+             addMessage(`📍 Ubicación detectada en mensaje: ${result.detectedLocation}`, 'ai');
+        }
+
+        // Check if we have a valid location now (either pre-existing or just detected)
+        const hasValidLocation = !!locationState.district || !!result.detectedLocation || !!locationState.coordinates;
+
+        // --- ROUTING LOGIC ---
+        if (result.intent === 'triage') {
+             try {
+                 const triageResult = await analyzeSymptoms(result.transcription);
+                 if (sessionRef.current !== currentSession) return;
+                 setAnalysis(triageResult);
+                 setIsTyping(false);
+                 
+                 // Smart Jump: If we have location, skip selector
+                 if (hasValidLocation) {
+                     addMessage("He analizado tus síntomas. Buscando centros cercanos...", 'ai');
+                     setStep(3);
+                     setMobileTab('results');
+                 } else {
+                     addMessage("He analizado tus síntomas. Ahora, selecciona tu Departamento para ubicarte:", 'ai');
+                     addMessage('', 'ai', 'department_selector');
+                     setStep(1.1);
+                     setMobileTab('analysis');
+                 }
+                 return;
+             } catch(e) {}
+        } 
+        else if (result.intent === 'pharmacy') {
+             try {
+                const meds = await analyzeMedications(result.transcription);
+                if (sessionRef.current !== currentSession) return;
+                setPharmacyAnalysis(meds);
+                setIsTyping(false);
+
+                // Smart Jump
+                if (hasValidLocation) {
+                     addMessage("Información encontrada. Buscando farmacias cercanas...", 'ai');
+                     setStep(3);
+                     setMobileTab('results');
+                } else {
+                    addMessage("He encontrado información del medicamento. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
+                    addMessage('', 'ai', 'department_selector');
+                    setStep(1.1);
+                    setMobileTab('analysis');
+                }
+                return;
+             } catch(e) {}
+        }
+        else if (result.intent === 'directory') {
+             setIsTyping(false);
+             setSymptomsOrMed(result.query); 
+             addMessage(`Buscando detalles de "${result.query}"...`, 'ai');
+             setStep(3);
+             setMobileTab('results');
+             return;
+        }
+        else {
+             // 'chat' intent or fallback
+             setIsTyping(false);
+             if (step === 0) {
+                 addMessage("Hola. Puedo ayudarte con triaje, farmacias o directorio. ¿Qué necesitas?", 'ai');
+             } else {
+                 const response = await generateFollowUp([{role: 'user', parts: [{text: result.transcription}]}], uploadedFiles);
+                 addMessage(response.text, 'ai');
+             }
+             return;
+        }
+    }
+
+    // --- 3. EXPLICIT STEP LOGIC (If user is manually in a flow) ---
+    
+    // Step 1: User inputs symptoms/medication/query MANUALLY (Not audio, not Step 0)
+    if (step === 1 && !audio) {
+        setSymptomsOrMed(text);
+        // Check pre-existing location
+        const hasValidLocation = !!locationState.district || !!locationState.coordinates;
+        
+        if (flow === 'triage') {
              try {
                  const result = await analyzeSymptoms(text);
                  if (sessionRef.current !== currentSession) return;
                  setAnalysis(result);
                  setIsTyping(false);
-                 addMessage("He analizado tus síntomas. Ahora, selecciona tu Departamento para ubicarte:", 'ai');
-                 addMessage('', 'ai', 'department_selector');
-                 setStep(1.1);
-                 setMobileTab('analysis');
-                 return;
-             } catch(e) {}
-        } else if (detectedIntent === 'pharmacy') {
-             try {
-                const meds = await analyzeMedications(text);
-                if (sessionRef.current !== currentSession) return;
-                setPharmacyAnalysis(meds);
-                setIsTyping(false);
-                addMessage("He encontrado información. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
-                addMessage('', 'ai', 'department_selector');
-                setStep(1.1);
-                setMobileTab('analysis');
-                return;
-             } catch(e) {}
-        } 
-        
-        if (detectedIntent === 'directory') {
-             setIsTyping(false);
-             addMessage(`Buscando detalles de "${text}"...`, 'ai');
-             setStep(3); // Go straight to search
-             setMobileTab('results');
-             return;
-        }
-        return;
-    }
-
-    // Step 1: User inputs symptoms/medication/query
-    if (step === 1) {
-        if (!audio) setSymptomsOrMed(text);
-        
-        // TRIAGE FLOW
-        if (flow === 'triage') {
-             try {
-                 const input = audio || text;
-                 const result = await analyzeSymptoms(input);
-                 if (sessionRef.current !== currentSession) return;
-
-                 if (result.confidence < 5 && result.detectedSymptoms.length === 0) {
-                     setIsTyping(false);
-                     addMessage("Sigo sin detectar síntomas claros. Intenta decir: 'Me duele la cabeza' o 'Tengo fiebre'.", 'ai');
-                     return;
-                 }
-
-                 setAnalysis(result);
-                 setIsTyping(false);
                  
-                 addMessage("He analizado tus síntomas. Ahora, selecciona tu Departamento para ubicarte:", 'ai');
-                 addMessage('', 'ai', 'department_selector');
-                 setStep(1.1); 
-                 setMobileTab('analysis'); 
+                 if (hasValidLocation) {
+                     addMessage("Análisis completo. Buscando clínicas...", 'ai');
+                     setStep(3);
+                     setMobileTab('results');
+                 } else {
+                     addMessage("He analizado tus síntomas. Selecciona tu Departamento:", 'ai');
+                     addMessage('', 'ai', 'department_selector');
+                     setStep(1.1); 
+                     setMobileTab('analysis');
+                 }
                  return;
-             } catch (e) {
-                 setIsTyping(false);
-                 addMessage("Hubo un error analizando. Intenta de nuevo.", 'ai');
-                 return;
-             }
+             } catch (e) {}
         } 
         
-        // PHARMACY FLOW
-        if (flow === 'pharmacy' && !audio) {
+        if (flow === 'pharmacy') {
             try {
                 setAnalysis(null); 
                 const meds = await analyzeMedications(text);
                 if (sessionRef.current !== currentSession) return;
-                
                 setPharmacyAnalysis(meds);
                 setIsTyping(false);
-                addMessage("He preparado un resumen farmacéutico. Confirma tu ubicación:", 'ai');
-                addMessage('', 'ai', 'department_selector');
-                setStep(1.1);
-                setMobileTab('analysis');
+
+                if (hasValidLocation) {
+                     addMessage("Buscando farmacias...", 'ai');
+                     setStep(3);
+                     setMobileTab('results');
+                } else {
+                    addMessage("Resumen listo. Confirma tu ubicación:", 'ai');
+                    addMessage('', 'ai', 'department_selector');
+                    setStep(1.1);
+                    setMobileTab('analysis');
+                }
                 return;
-            } catch (e) { setIsTyping(false); }
+            } catch (e) {}
         }
 
-        // DIRECTORY FLOW (Immediate Search)
-        if (flow === 'directory' && !audio) {
+        if (flow === 'directory') {
              setIsTyping(false);
              addMessage(`Buscando detalles de "${text}"...`, 'ai');
              setStep(3);
@@ -355,19 +407,9 @@ export default function App() {
              return;
         }
     } 
-    // Step 1.5: Manual Location Fallback (Chat based)
-    else if (step === 1.5 && !audio) {
-        setLocationState({ status: 'success', district: text, coordinates: null });
-        setTimeout(() => {
-            if (sessionRef.current !== currentSession) return;
-            setIsTyping(false);
-            addMessage(`Entendido. Buscando en ${text}...`, 'ai');
-            setStep(3);
-            setMobileTab('results');
-        }, 600);
-    }
-    // Step 3: Follow up chat
-    else if (step === 3) {
+
+    // Step 3: ACTION-DRIVEN ACTIVE CHAT
+    else if (step === 3 && !audio) {
         const history = [
              ...messages.map(m => ({
                 role: m.sender === 'user' ? 'user' : 'model',
@@ -377,10 +419,26 @@ export default function App() {
         ].filter(m => m.parts[0].text && !m.parts[0].text.includes('selecciona') && !m.parts[0].text.includes('Usar mi ubicación'));
 
         try {
+             // New GenerateFollowUp returns JSON { text, action, query }
              const response = await generateFollowUp(history, uploadedFiles);
              if (sessionRef.current !== currentSession) return;
+             
              setIsTyping(false);
-             addMessage(response, 'ai');
+             addMessage(response.text, 'ai');
+
+             // AUTOMATED ACTION HANDLER
+             if (response.action === 'SEARCH_MAPS') {
+                 // Force switch to map view
+                 if (response.query) setSymptomsOrMed(response.query);
+                 setStep(3);
+                 setMobileTab('results');
+                 
+                 // If we have location, the useEffect will trigger the search automatically
+                 // If not, we might need to prompt
+                 if (!locationState.district && !locationState.coordinates) {
+                     addMessage("Para mostrarte el mapa, necesito tu ubicación.", 'ai', 'department_selector');
+                 }
+             }
         } catch(e) { setIsTyping(false); }
     }
   };

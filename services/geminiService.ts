@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { TriageAnalysis, UrgencyLevel, Doctor, RagDocument, MedicalCenter, MedicineInfo } from '../types';
 
@@ -148,6 +147,75 @@ export const analyzeSymptoms = async (input: string | { mimeType: string, data: 
   });
 };
 
+// ================= ROUTING & CLASSIFICATION =================
+
+export interface MultimodalIntent {
+    intent: 'triage' | 'pharmacy' | 'directory' | 'chat';
+    transcription: string; // What the user said
+    query: string; // Cleaned query for search
+    detectedLocation?: string; // New: Location extracted from text
+}
+
+export const classifyMultimodalIntent = async (input: string | { mimeType: string, data: string }): Promise<MultimodalIntent> => {
+    return callWithRetry(async () => {
+        try {
+            let contents: any;
+            if (typeof input === 'string') {
+                contents = `Classify this text: "${input}"`;
+            } else {
+                contents = {
+                    parts: [
+                        { inlineData: { mimeType: input.mimeType, data: input.data } },
+                        { text: `Listen to the audio. Transcribe it and classify the intent.` }
+                    ]
+                };
+            }
+
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: contents,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            intent: { type: Type.STRING, enum: ["triage", "pharmacy", "directory", "chat"] },
+                            transcription: { type: Type.STRING, description: "Verbatim transcription of audio or copy of text" },
+                            query: { type: Type.STRING, description: "Extracted search query (e.g. 'Clinica San Pablo', 'Paracetamol', 'Fiebre')" },
+                            detectedLocation: { type: Type.STRING, description: "Any explicit location mentioned (e.g. 'in San Borja', 'near Miraflores'). Empty if none." }
+                        },
+                        required: ["intent", "transcription", "query"]
+                    },
+                    systemInstruction: `You are an intent router for a health app.
+                    - 'triage': User describes symptoms ("Me duele la cabeza", "Tengo fiebre").
+                    - 'pharmacy': User asks for medication price, stock, or location ("Donde compro Panadol", "Precio de Amoxicilina", "Farmacias cerca").
+                    - 'directory': User asks for a SPECIFIC clinic/hospital location ("Donde esta la Clinica Delgado", "Busco el Hospital Rebagliati").
+                    - 'chat': Greetings, noise, or general questions not related to finding health services.
+                    
+                    EXTRACT LOCATION: If the user mentions a district or city (e.g. "en San Isidro", "por Surco"), put it in 'detectedLocation'.`
+                }
+            });
+
+            const result = JSON.parse(response.text || "{}");
+            return {
+                intent: result.intent || 'chat',
+                transcription: result.transcription || (typeof input === 'string' ? input : 'Audio'),
+                query: result.query || '',
+                detectedLocation: result.detectedLocation || ''
+            };
+        } catch (e) {
+            return { intent: 'chat', transcription: 'Error de audio', query: '' };
+        }
+    });
+};
+
+export const classifyUserIntent = async (text: string): Promise<'triage' | 'pharmacy' | 'directory'> => {
+    // Legacy wrapper for backward compatibility
+    const res = await classifyMultimodalIntent(text);
+    if (res.intent === 'chat') return 'triage';
+    return res.intent;
+}
+
 // ================= MEDICINE ANALYSIS (Vademecum) =================
 
 export const analyzeMedications = async (text: string): Promise<MedicineInfo[]> => {
@@ -242,7 +310,6 @@ export const searchNearbyPlaces = async (
             } 
             // --- STRATEGY 2: PHARMACY (Strict Filtering) ---
             else if (intent === 'pharmacy') {
-                 // We explicitly EXCLUDE clinics to solve the "mixed results" problem
                  prompt = `Find 8 open "Farmacias" or "Boticas" in ${location || 'Lima, Peru'}. 
                  Strictly exclude "Clinica", "Hospital", "Centro Medico", "Veterinaria". 
                  Return names, exact addresses, ratings.`;
@@ -283,17 +350,12 @@ export const searchNearbyPlaces = async (
                          
                          // --- CLIENT-SIDE STRICT FILTERING ---
                          if (intent === 'pharmacy') {
-                             // Must contain pharmacy keywords
                              const isPharmacy = /farmacia|botica|apothecary|inkafarma|mifarma/i.test(nameLower);
-                             // Must NOT contain hospital keywords
                              const isClinic = /clinica|hospital|centro m[eé]dico|policl[ií]nico|veterinaria/i.test(nameLower);
-                             
-                             if (!isPharmacy || isClinic) return; // Skip this result
+                             if (!isPharmacy || isClinic) return; 
                          }
 
                          let type: MedicalCenter['type'] = intent === 'pharmacy' ? 'Farmacia' : 'Clínica';
-                         
-                         // Determine if 24h ER likely (heuristic based on name for Triage)
                          const has24h = /hospital|clinica|emergencia/i.test(nameLower) && intent === 'triage';
 
                          places.push({
@@ -316,7 +378,6 @@ export const searchNearbyPlaces = async (
                 });
             }
 
-            // Deduplicate
             const uniquePlaces = places.filter((v,i,a)=>a.findIndex(v2=>(v2.name === v.name))===i);
 
             return {
@@ -329,20 +390,51 @@ export const searchNearbyPlaces = async (
     });
 }
 
-export const generateFollowUp = async (history: any[], activeFiles: RagDocument[] = []): Promise<string> => {
+// ================= ACTION-DRIVEN CHAT =================
+
+export interface ChatActionResponse {
+    text: string;
+    action: 'SEARCH_MAPS' | 'NONE';
+    query: string;
+}
+
+export const generateFollowUp = async (history: any[], activeFiles: RagDocument[] = []): Promise<ChatActionResponse> => {
     return callWithRetry(async () => {
         try {
             const hasFiles = activeFiles.length > 0;
-            let systemInstruction = `You are Doctoi. Keep responses short and helpful. Spanish.`;
+            let systemInstruction = `You are Doctoi. Keep responses short and helpful. Spanish.
+            IMPORTANT:
+            - If the user explicitly asks where to buy something, where a clinic is, or asks for locations/addresses, set "action" to "SEARCH_MAPS" and "query" to the object they are looking for.
+            - Otherwise set "action" to "NONE".`;
+            
             if (hasFiles) systemInstruction += ` Use uploaded documents to answer.`;
 
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
                 contents: history,
-                config: { systemInstruction }
+                config: { 
+                    systemInstruction,
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            text: { type: Type.STRING },
+                            action: { type: Type.STRING, enum: ["SEARCH_MAPS", "NONE"] },
+                            query: { type: Type.STRING }
+                        }
+                    }
+                }
             });
-            return response.text || "No pude procesar eso.";
-        } catch (e) { return "Error de conexión."; }
+            
+            const result = JSON.parse(response.text || "{}");
+            return {
+                text: result.text || "No pude procesar eso.",
+                action: result.action || "NONE",
+                query: result.query || ""
+            };
+        } catch (e) { 
+            return { text: "Error de conexión.", action: "NONE", query: "" }; 
+        }
     });
 }
 
@@ -358,33 +450,5 @@ export const generateDoctorResponse = async (history: any[], doctor: Doctor, tri
             });
             return response.text || "Error de conexión.";
         } catch (e) { return "Error de conexión."; }
-    });
-}
-
-export const classifyUserIntent = async (text: string): Promise<'triage' | 'pharmacy' | 'directory'> => {
-    return callWithRetry(async () => {
-        try {
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: `Classify intent: 'triage', 'pharmacy', 'directory'. 
-                Rules:
-                - If input is a medication name (e.g. "Paracetamol", "Ibuprofeno", "Amoxicilina"), classify as 'pharmacy'.
-                - If input describes symptoms (e.g. "Dolor de cabeza", "Fiebre"), classify as 'triage'.
-                - If input is searching for a place name, classify as 'directory'.
-                
-                Input: "${text}"`,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            intent: { type: Type.STRING, enum: ["triage", "pharmacy", "directory"] }
-                        }
-                    }
-                }
-            });
-            const result = JSON.parse(response.text || "{}");
-            return result.intent || 'triage';
-        } catch (e) { return 'triage'; }
     });
 }
