@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Message, INSURANCES } from '../types';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from '../data/ubigeo';
+import { useLanguage } from '../contexts/LanguageContext';
+import { LanguageToggle } from './LanguageToggle';
 
 interface LocationState {
     status: 'idle' | 'requesting' | 'searching' | 'success' | 'error';
@@ -21,7 +23,7 @@ interface ChatPanelProps {
   onReset: () => void;
   onRequestLocation: () => void;
   onShowData: () => void;
-  onNavigate: (tab: 'analysis' | 'results') => void; // New prop
+  onNavigate: (tab: 'analysis' | 'results') => void; 
   isTyping: boolean;
   
   locationState?: LocationState;
@@ -101,6 +103,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   flow,
   isConsultationActive = false
 }) => {
+  const { t } = useLanguage();
   const [input, setInput] = useState('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -188,16 +191,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const isInputDisabled = currentStep === 1.1 || currentStep === 1.2 || currentStep === 2 || isLocationBusy || isConsultationActive;
 
   const getPlaceholder = () => {
-      if (isRecording) return "Escuchando... (Toca para detener)";
-      if (isConsultationActive) return "Consulta con especialista en curso...";
-      if (currentStep === 0) return "Describe tu síntoma, busca medicina o clínica...";
+      if (isRecording) return t.chat.recording;
+      if (isConsultationActive) return t.chat.consultationActive;
+      if (currentStep === 0) return t.chat.placeholderDefault;
       if (currentStep === 1) {
-          if (flow === 'pharmacy') return "Escribe el nombre del medicamento...";
-          if (flow === 'directory') return "Nombre de la clínica o distrito...";
-          return "Describe tus síntomas detalladamente...";
+          if (flow === 'pharmacy') return t.chat.placeholderPharmacy;
+          if (flow === 'directory') return t.chat.placeholderDirectory;
+          return t.chat.placeholderTriage;
       }
-      if (currentStep === 1.5) return "Escribe tu ubicación exacta...";
-      return "Escribe un mensaje...";
+      if (currentStep === 1.5) return t.chat.placeholderLocation;
+      return t.chat.placeholderDefault;
   }
 
   return (
@@ -210,8 +213,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             <span className={`text-sm font-bold tracking-tight ${isConsultationActive ? 'text-slate-400' : 'text-slate-700'}`}>Doctoi AI</span>
         </div>
         
-        <div className="flex items-center gap-3">
-            <button onClick={onReset} className="text-slate-400 hover:text-blue-600 transition" title="Reiniciar">
+        <div className="flex items-center gap-2">
+            <LanguageToggle />
+            
+            <div className="w-[1px] h-4 bg-slate-200 mx-1"></div>
+
+            <button onClick={onReset} className="text-slate-400 hover:text-blue-600 transition" title={t.chat.reset}>
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
             </svg>
@@ -224,10 +231,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-xl shadow-xl border border-slate-100 py-2 animate-fade-enter origin-top-right overflow-hidden z-50">
                         <button onClick={() => { setIsMenuOpen(false); onShowData(); }} className="w-full text-left px-4 py-3 text-xs font-bold text-violet-700 bg-violet-50 hover:bg-violet-100 transition flex items-center gap-2 mb-1">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                            📂 Mis Datos (RAG)
+                            {t.chat.menu.myFiles}
                         </button>
                         <div className="h-px bg-slate-100 mx-4 my-1"></div>
-                        <button onClick={() => { setIsMenuOpen(false); setShowAbout(true); }} className="w-full text-left px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition">Acerca de</button>
+                        <button onClick={() => { setIsMenuOpen(false); setShowAbout(true); }} className="w-full text-left px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition">{t.chat.menu.about}</button>
                     </div>
                 )}
             </div>
@@ -247,28 +254,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             {/* INTENT SELECTOR */}
             {msg.type === 'intent_selector' && !isConsultationActive && (
                 <div className="w-full flex flex-col gap-2 mt-2">
-                    <div className="text-xs text-slate-400 ml-1 mb-1">Selecciona una opción o escribe abajo:</div>
+                    <div className="text-xs text-slate-400 ml-1 mb-1">{t.chat.intentPrompt}</div>
                     <div className="flex flex-wrap gap-2 w-full">
                         <button onClick={() => onSelectIntent('triage')} className="flex-1 min-w-[90px] bg-white border border-emerald-100 p-3 rounded-2xl shadow-sm hover:shadow-md hover:border-emerald-400 transition-all group text-left flex flex-col">
                             <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center text-lg mb-2 group-hover:bg-emerald-100 transition-colors">🩺</div>
-                            <h4 className="font-bold text-slate-800 text-xs">Dolencia</h4>
-                            <p className="text-[10px] text-slate-500 mt-1 leading-tight">Triaje IA.</p>
+                            <h4 className="font-bold text-slate-800 text-xs">{t.intents.triage.title}</h4>
+                            <p className="text-[10px] text-slate-500 mt-1 leading-tight">{t.intents.triage.desc}</p>
                         </button>
                         <button onClick={() => onSelectIntent('pharmacy')} className="flex-1 min-w-[90px] bg-white border border-blue-100 p-3 rounded-2xl shadow-sm hover:shadow-md hover:border-blue-400 transition-all group text-left flex flex-col">
                             <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-lg mb-2 group-hover:bg-blue-100 transition-colors">💊</div>
-                            <h4 className="font-bold text-slate-800 text-xs">Farmacia</h4>
-                            <p className="text-[10px] text-slate-500 mt-1 leading-tight">Medicinas.</p>
+                            <h4 className="font-bold text-slate-800 text-xs">{t.intents.pharmacy.title}</h4>
+                            <p className="text-[10px] text-slate-500 mt-1 leading-tight">{t.intents.pharmacy.desc}</p>
                         </button>
                         <button onClick={() => onSelectIntent('directory')} className="flex-1 min-w-[90px] bg-white border border-indigo-100 p-3 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-400 transition-all group text-left flex flex-col">
                             <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-lg mb-2 group-hover:bg-indigo-100 transition-colors">🏥</div>
-                            <h4 className="font-bold text-slate-800 text-xs">Directorio</h4>
-                            <p className="text-[10px] text-slate-500 mt-1 leading-tight">Clínicas.</p>
+                            <h4 className="font-bold text-slate-800 text-xs">{t.intents.directory.title}</h4>
+                            <p className="text-[10px] text-slate-500 mt-1 leading-tight">{t.intents.directory.desc}</p>
                         </button>
                     </div>
                 </div>
             )}
 
-            {/* LOCATION SELECTOR (Direct District) */}
+            {/* LOCATION SELECTOR */}
             {msg.type === 'district_selector' && !isConsultationActive && (
               <div className="w-[90%] mt-2 flex flex-col gap-4">
                  <div className={`relative overflow-hidden p-4 rounded-2xl border transition-all duration-300 ${isLocationBusy ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200 hover:border-blue-200 hover:shadow-md'}`}>
@@ -282,29 +289,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                         </div>
                         <div className="flex-1">
                             <h4 className={`text-sm font-bold ${isLocationBusy ? 'text-blue-800' : 'text-slate-700'}`}>
-                                {locationState?.status === 'requesting' ? 'Obteniendo GPS...' : 
-                                 locationState?.status === 'searching' ? 'Analizando mapa...' : 
-                                 'Ubicación Automática'}
+                                {locationState?.status === 'requesting' ? t.location.gettingGPS : 
+                                 locationState?.status === 'searching' ? t.location.analyzingMap : 
+                                 t.location.autoLocation}
                             </h4>
                             <p className="text-xs text-slate-500 leading-tight mt-0.5">
-                                {isLocationBusy ? 'Estamos detectando tu zona...' : 'Detectar mi distrito automáticamente'}
+                                {isLocationBusy ? t.location.detectingZone : t.location.detectAuto}
                             </p>
                         </div>
                         <button onClick={onRequestLocation} disabled={isLocationBusy} className={`px-4 py-2 text-xs font-bold rounded-xl transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isLocationBusy ? 'bg-white text-blue-600' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-                            {isLocationBusy ? '...' : 'Activar'}
+                            {isLocationBusy ? '...' : t.location.activate}
                         </button>
                     </div>
                     {isLocationBusy && <div className="absolute bottom-0 left-0 h-1 bg-blue-400/30 w-full animate-pulse"></div>}
                  </div>
                 <div className="flex items-center gap-3 text-xs text-slate-400">
                     <div className="h-[1px] bg-slate-200 flex-1"></div>
-                    o selecciona manualmente
+                    {t.location.manualSelect}
                     <div className="h-[1px] bg-slate-200 flex-1"></div>
                 </div>
                 
-                {/* Simplified District Selection (Skipping Dept/Prov since it's Lima only) */}
                 <select onChange={(e) => onSelectDistrict(e.target.value)} className="w-full p-3 rounded-xl border border-slate-200 text-sm text-slate-700 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none shadow-sm cursor-pointer appearance-none" defaultValue="">
-                    <option value="" disabled>Selecciona tu Distrito (Lima)...</option>
+                    <option value="" disabled>{t.location.selectDistrict}</option>
                     {activeDistricts.map(d => <option key={d.id} value={d.id}>📍 {d.name.trim()}</option>)}
                 </select>
               </div>
@@ -332,23 +338,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {/* INPUT */}
       <div className="p-4 pb-4 bg-white border-t border-slate-50 relative flex-shrink-0 z-20 transition-all">
-        {/* Chips for quick select */}
+        {/* Chips */}
         {currentStep === 1 && flow === 'triage' && !isConsultationActive && (
             <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
-            <button onClick={() => setInput('Tengo fiebre alta y me duele la cabeza')} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">🤒 Fiebre alta</button>
-            <button onClick={() => setInput('Me duele mucho el estómago y tengo náuseas')} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">🤢 Dolor estómago</button>
+            <button onClick={() => setInput(t.chat.chips.fever)} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">{t.chat.chips.fever}</button>
+            <button onClick={() => setInput(t.chat.chips.stomach)} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">{t.chat.chips.stomach}</button>
             </div>
         )}
         {currentStep === 1 && flow === 'pharmacy' && !isConsultationActive && (
             <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
-                <button onClick={() => setInput('Paracetamol 500mg')} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">💊 Paracetamol</button>
-                <button onClick={() => setInput('Amoxicilina')} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">💊 Amoxicilina</button>
+                <button onClick={() => setInput(t.chat.chips.paracetamol)} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">{t.chat.chips.paracetamol}</button>
+                <button onClick={() => setInput(t.chat.chips.amoxicillin)} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">{t.chat.chips.amoxicillin}</button>
             </div>
         )}
         {currentStep === 1 && flow === 'directory' && !isConsultationActive && (
             <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
-                <button onClick={() => setInput('Clínica San Pablo')} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">🏥 Clínica San Pablo</button>
-                <button onClick={() => setInput('Hospital Rebagliati')} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">🏥 Rebagliati</button>
+                <button onClick={() => setInput(t.chat.chips.clinic1)} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">{t.chat.chips.clinic1}</button>
+                <button onClick={() => setInput(t.chat.chips.hospital1)} className="whitespace-nowrap px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-500 hover:border-blue-300 hover:text-blue-600 transition">{t.chat.chips.hospital1}</button>
             </div>
         )}
 
@@ -384,7 +390,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       </div>
 
-      {/* ABOUT MODAL (REDESIGNED V2 - VISUAL IDENTITY MATCH) */}
+      {/* ABOUT MODAL */}
       {showAbout && (
         <div className="absolute inset-0 z-[60] flex items-center justify-center p-6 bg-slate-900/20 backdrop-blur-sm animate-fade-enter">
             <div className="bg-white/95 backdrop-blur-xl rounded-[2rem] shadow-2xl shadow-blue-900/10 border border-white w-full max-w-sm overflow-hidden relative flex flex-col items-center text-center p-8">
@@ -396,7 +402,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
 
-                {/* VISUAL IDENTITY LOGO (Mini version of Hero) */}
                 <div className="w-24 h-24 mb-6 relative">
                     <svg width="100%" height="100%" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <defs>
@@ -415,13 +420,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     </svg>
                 </div>
 
-                <h3 className="text-2xl font-bold text-slate-800 tracking-tight mb-1">Doctoi</h3>
+                <h3 className="text-2xl font-bold text-slate-800 tracking-tight mb-1">{t.about.title}</h3>
                 <p className="text-sm font-medium text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-emerald-500 mb-6 uppercase tracking-wider">
-                    Orientación de Salud
+                    {t.about.subtitle}
                 </p>
 
                 <p className="text-sm text-slate-500 leading-relaxed mb-6">
-                  Una iniciativa tecnológica para facilitar el acceso a información de salud en Lima. Conectamos síntomas con especialistas y farmacias usando Inteligencia Artificial.
+                  {t.about.desc}
                 </p>
                 
                 <div className="flex flex-wrap justify-center gap-2 mb-6">
@@ -436,9 +441,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl w-full text-left flex gap-3 mb-6">
                      <div className="text-xl">⚠️</div>
                      <div>
-                        <h4 className="text-[10px] font-bold text-amber-800 uppercase tracking-wide mb-0.5">Descargo de Responsabilidad</h4>
+                        <h4 className="text-[10px] font-bold text-amber-800 uppercase tracking-wide mb-0.5">{t.about.disclaimerTitle}</h4>
                         <p className="text-[10px] text-amber-700/80 leading-tight">
-                            Los resultados son informativos y no constituyen diagnóstico médico. En caso de emergencia, llama al 106.
+                            {t.about.disclaimerText}
                         </p>
                      </div>
                 </div>
@@ -447,7 +452,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   onClick={() => setShowAbout(false)} 
                   className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition active:scale-95 shadow-lg shadow-slate-200"
                 >
-                    Entendido
+                    {t.common.understood}
                 </button>
             </div>
         </div>

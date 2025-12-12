@@ -1,7 +1,10 @@
 
 import React from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 export const HeroSection: React.FC = () => {
+  const { t } = useLanguage();
+
   return (
     <section className="hidden lg:flex col-span-12 lg:col-span-8 h-full flex-col items-center justify-center relative animate-fade-enter z-10">
       
@@ -51,30 +54,30 @@ export const HeroSection: React.FC = () => {
             
             <div className="flex flex-col items-start text-left">
                 <div className="flex items-center gap-2 mb-1">
-                    <h1 className="text-6xl font-bold text-slate-800 tracking-tighter leading-none">Doctoi</h1>
-                    <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 uppercase tracking-wide">Beta IA</span>
+                    <h1 className="text-6xl font-bold text-slate-800 tracking-tighter leading-none">{t.welcome.title}</h1>
+                    <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 uppercase tracking-wide">{t.common.beta}</span>
                 </div>
                 <span className="text-sm font-medium text-slate-500 tracking-widest uppercase ml-1 flex items-center gap-2">
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                    Orientación & Búsqueda
+                    {t.welcome.subtitle}
                 </span>
             </div>
         </div>
 
         {/* COPYWRITING - LEGAL SAFE & ACTION ORIENTED */}
         <h2 className="text-4xl md:text-5xl font-bold text-slate-800 mb-6 tracking-tight leading-tight md:leading-[1.15]">
-            Tu brújula de salud <br className="hidden xl:block" />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-emerald-500">en la ciudad de Lima.</span>
+            {t.welcome.heroTitle} <br className="hidden xl:block" />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-emerald-500">{t.welcome.heroSubtitle}</span>
         </h2>
         
         <p className="text-lg text-slate-500 leading-relaxed max-w-2xl mx-auto mb-8">
-          Utiliza nuestra IA para pre-analizar tus síntomas y encontrar rápidamente farmacias, clínicas y especialistas reales cerca de ti.
+          {t.welcome.description}
         </p>
 
         {/* DISCLAIMER BADGE */}
         <div className="flex items-center justify-center gap-2 bg-slate-100/80 px-4 py-2 rounded-full border border-slate-200/50 backdrop-blur-sm">
             <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            <span className="text-xs text-slate-500 font-medium">Herramienta informativa. No reemplaza la consulta médica profesional.</span>
+            <span className="text-xs text-slate-500 font-medium">{t.welcome.disclaimer}</span>
         </div>
 
       </div>

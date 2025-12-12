@@ -1,4 +1,5 @@
 
+
 export interface Message {
   id: string;
   text: string;
@@ -40,7 +41,7 @@ export interface MedicineInfo {
   interactions: string[]; // Food or drug interactions
   alternatives: string[]; // Generic names
   requiresPrescription: boolean;
-  takenWithFood: 'Antes' | 'Después' | 'Indiferente' | 'Con alimentos';
+  takenWithFood: 'Antes' | 'Después' | 'Indiferente' | 'Con alimentos' | 'Before' | 'After' | 'Indifferent' | 'With food';
 }
 
 export interface MedicalCenter {

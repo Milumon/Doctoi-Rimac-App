@@ -14,6 +14,7 @@ import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, RagDocument, Urge
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
 import { OFFICIAL_SOURCES } from './data/knowledgeBase';
 import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyMultimodalIntent, generateAssistantResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
+import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
@@ -32,16 +33,26 @@ export interface LocationState {
   error?: string;
 }
 
-export default function App() {
+function DoctoiApp() {
+  const { language, t } = useLanguage(); 
+  
   const [step, setStep] = useState<Step>(0);
   const [flow, setFlow] = useState<Flow>(null);
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', text: 'Hola. Soy Doctoi. ¿En qué puedo ayudarte hoy?', sender: 'ai', type: 'text' },
-    { id: '2', text: '', sender: 'ai', type: 'intent_selector' }
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  
+  // Initialize welcome message
+  useEffect(() => {
+      if (messages.length === 0) {
+        setMessages([
+            { id: '1', text: t.chat.welcomeMessage, sender: 'ai', type: 'text' },
+            { id: '2', text: '', sender: 'ai', type: 'intent_selector' }
+        ]);
+      }
+  }, [t]);
+
   const [isTyping, setIsTyping] = useState(false);
   
-  // NEW: Unified Location State
+  // Unified Location State
   const [locationState, setLocationState] = useState<LocationState>({
       status: 'idle',
       coordinates: null,
@@ -81,8 +92,8 @@ export default function App() {
   const sessionRef = useRef(0);
 
   const [symptomsOrMed, setSymptomsOrMed] = useState(''); 
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState('15'); // Default Lima
-  const [selectedProvinceId, setSelectedProvinceId] = useState('1501'); // Default Lima
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState('15'); 
+  const [selectedProvinceId, setSelectedProvinceId] = useState('1501'); 
   
   const [insurance, setInsurance] = useState('Sin Seguro');
   
@@ -152,24 +163,24 @@ export default function App() {
             
             let query = '';
             if (flow === 'pharmacy') {
-                query = 'Farmacias y Boticas';
+                query = language === 'es' ? 'Farmacias y Boticas' : 'Pharmacies';
             }
             else if (flow === 'triage') query = analysis?.specialty ? `clínicas para ${analysis.specialty}` : 'centros de salud';
             else query = symptomsOrMed || 'clínicas'; 
 
             setIsLoadingResults(true);
-            setIsTyping(true); // Show typing while searching maps
+            setIsTyping(true); 
             setDynamicCenters([]); 
 
             const searchLocation = currentDistrict || (isDirectoryMode ? 'Lima, Peru' : '');
-            const result = await searchNearbyPlaces(query, searchLocation, currentCoords, flow);
+            
+            const result = await searchNearbyPlaces(query, searchLocation, currentCoords, flow, language);
             
             if (sessionRef.current === currentSessionId) {
                 setDynamicCenters(result.places);
                 setIsLoadingResults(false);
-                setIsTyping(false); // Stop typing when results arrive
+                setIsTyping(false); 
                 
-                // Trigger notification if user is not on results tab
                 if (result.places.length > 0 && mobileTab !== 'results') {
                     setUnreadResults(true);
                     triggerToast('places');
@@ -182,7 +193,7 @@ export default function App() {
     
     const currentSessionId = sessionRef.current;
     performDynamicSearch();
-  }, [step, locationState.district, locationState.coordinates, flow, symptomsOrMed, analysis, pharmacyAnalysis, locationState.status]); 
+  }, [step, locationState.district, locationState.coordinates, flow, symptomsOrMed, analysis, pharmacyAnalysis, locationState.status, language]); 
 
   // PWA Install
   useEffect(() => {
@@ -223,7 +234,6 @@ export default function App() {
       setStep(0);                
       setMobileTab('chat');
       
-      // AUTO-CLOSE DATA PANEL: Restore UI for new flow
       setRightPanelMode('results');
 
       setUnreadAnalysis(false);
@@ -231,9 +241,15 @@ export default function App() {
       setShowToast(false);
       
       let intentText = '';
-      if (selectedFlow === 'pharmacy') intentText = 'Busco medicamentos';
-      else if (selectedFlow === 'directory') intentText = 'Busco una clínica específica';
-      else intentText = 'Tengo un malestar';
+      if (language === 'es') {
+          if (selectedFlow === 'pharmacy') intentText = 'Busco medicamentos';
+          else if (selectedFlow === 'directory') intentText = 'Busco una clínica específica';
+          else intentText = 'Tengo un malestar';
+      } else {
+          if (selectedFlow === 'pharmacy') intentText = 'Looking for medicine';
+          else if (selectedFlow === 'directory') intentText = 'Looking for a specific clinic';
+          else intentText = 'I have a health issue';
+      }
       
       addMessage(intentText, 'user');
       setIsTyping(true);
@@ -241,12 +257,13 @@ export default function App() {
       setTimeout(() => {
           if (sessionRef.current !== currentSession) return;
           setIsTyping(false);
+          
           if (selectedFlow === 'pharmacy') {
-              addMessage("Entendido. ¿Qué medicamento(s) buscas?", 'ai');
+              addMessage(language === 'es' ? "Entendido. ¿Qué medicamento(s) buscas?" : "Understood. Which medication are you looking for?", 'ai');
           } else if (selectedFlow === 'directory') {
-              addMessage("¿Qué clínica, hospital o centro médico buscas?", 'ai');
+              addMessage(language === 'es' ? "¿Qué clínica, hospital o centro médico buscas?" : "Which clinic, hospital or medical center are you looking for?", 'ai');
           } else {
-              addMessage("Entendido. Cuéntame qué sientes (puedes usar el micrófono).", 'ai');
+              addMessage(language === 'es' ? "Entendido. Cuéntame qué sientes (puedes usar el micrófono)." : "Understood. Tell me what you feel (you can use the microphone).", 'ai');
           }
           setStep(1);
       }, 600);
@@ -257,14 +274,13 @@ export default function App() {
       try {
           const newDoc = await uploadFileToGemini(file);
           setUploadedFiles(prev => [...prev, newDoc]);
-          // Use different feedback based on active panel
           if (isAssistantActive && rightPanelMode === 'assistant') {
-              addAssistantMessage(`📎 Archivo subido: ${file.name}`, 'user');
+              addAssistantMessage(`📎 ${file.name}`, 'user');
           } else if (mobileTab === 'chat' || rightPanelMode !== 'data') {
-              addMessage(`📂 He recibido el archivo "${file.name}". Lo usaré para responder tus preguntas.`, 'ai');
+              addMessage(language === 'es' ? `📂 He recibido el archivo "${file.name}".` : `📂 Received file "${file.name}".`, 'ai');
           }
       } catch (error) {
-          const errorMsg = "⚠️ Error al subir el archivo. Inténtalo de nuevo.";
+          const errorMsg = language === 'es' ? "⚠️ Error al subir el archivo." : "⚠️ Error uploading file.";
           if (isAssistantActive && rightPanelMode === 'assistant') {
               addAssistantMessage(errorMsg, 'ai');
           } else {
@@ -289,18 +305,15 @@ export default function App() {
       setMobileTab('data');
   }
 
-  // ===================== REFACTORED: ROBUST MULTIMODAL ROUTER =====================
+  // ===================== MULTIMODAL ROUTER =====================
   const handleSendMessage = async (text: string, audio?: { mimeType: string, data: string }) => {
     const currentSession = sessionRef.current;
     
-    // AUTO-CLOSE DATA PANEL: If user sends a message, focus on chat/results
     if (rightPanelMode === 'data') setRightPanelMode('results');
     if (mobileTab === 'data') setMobileTab('chat');
 
-    // Get active sources for context
     const activeSources = knowledgeSources.filter(s => s.isActive);
 
-    // 1. UI FEEDBACK
     if (audio) {
         setIsTyping(true);
     } else {
@@ -310,36 +323,26 @@ export default function App() {
 
     const input = audio ? audio : text;
 
-    // 2. ALWAYS CLASSIFY INTENT
-    const result = await classifyMultimodalIntent(input);
+    const result = await classifyMultimodalIntent(input, language);
 
     if (sessionRef.current !== currentSession) return;
 
     if (audio) addMessage(`🎤 "${result.transcription}"`, 'user');
 
-    // 3. DETERMINE IF WE SWITCH FLOW OR CONTINUE CHAT
     const isFlowChange = (result.intent !== 'chat') || step < 3 || result.isEmergency;
     
     const forceSwitch = analysis?.urgency === UrgencyLevel.EMERGENCY && result.intent === 'pharmacy';
 
-    // === NEW: CONTEXTUAL SOURCE FILTERING LOGIC ===
-    // Determine which knowledge sources to use based on the *detected* intent (newFlow)
     const newFlow = result.intent as Flow;
     const relevantSources = knowledgeSources.filter(s => {
         if (!s.isActive) return false;
-        
-        // Map intents to categories
         if (newFlow === 'triage') return s.category === 'Protocolos';
         if (newFlow === 'pharmacy') return s.category === 'Farmacia';
         if (newFlow === 'directory') return s.category === 'Directorio' || s.category === 'Seguros';
-        
-        // For general chat, use relevantSources (which currently includes all active ones)
-        // Let's default to all enabled sources for broad context.
         return true; 
     });
 
     if (isFlowChange || forceSwitch) {
-        // === FLOW SWITCHING / RE-EXECUTION LOGIC ===
         
         let effectiveQuery = result.query || result.transcription;
         if (newFlow === 'triage' && flow === 'triage' && !result.isEmergency && analysis) {
@@ -358,7 +361,7 @@ export default function App() {
 
         if (result.detectedLocation) {
              setLocationState({ status: 'success', district: result.detectedLocation, coordinates: null });
-             addMessage(`📍 Ubicación detectada en mensaje: ${result.detectedLocation}`, 'ai');
+             addMessage(language === 'es' ? `📍 Ubicación detectada: ${result.detectedLocation}` : `📍 Location detected: ${result.detectedLocation}`, 'ai');
         }
 
         const hasValidLocation = !!locationState.district || !!result.detectedLocation || !!locationState.coordinates;
@@ -366,7 +369,7 @@ export default function App() {
         // EXECUTE FLOW LOGIC
         if (newFlow === 'triage') {
              try {
-                 const triageResult = await analyzeSymptoms(effectiveQuery, relevantSources);
+                 const triageResult = await analyzeSymptoms(effectiveQuery, relevantSources, language);
                  if (sessionRef.current !== currentSession) return;
                  setAnalysis(triageResult);
                  setIsTyping(false);
@@ -377,16 +380,16 @@ export default function App() {
 
                  if (hasValidLocation || isEmergency) {
                      if (isEmergency) {
-                        addMessage("🚨 EMERGENCIA DETECTADA. Mostrando protocolos de seguridad.", 'ai');
+                        addMessage(t.emergency.detected, 'ai');
                         setMobileTab('analysis'); 
                         setRightPanelMode('results'); 
                      } else {
-                        addMessage("He actualizado el análisis de síntomas. Buscando centros...", 'ai');
+                        addMessage(language === 'es' ? "He actualizado el análisis. Buscando centros..." : "Analysis updated. Searching for centers...", 'ai');
                      }
                      setStep(3); 
                  } else {
-                     addMessage("He analizado tus síntomas. Selecciona tu distrito para buscar clínicas:", 'ai');
-                     addMessage('', 'ai', 'district_selector'); // DIRECT TO DISTRICT
+                     addMessage(language === 'es' ? "He analizado tus síntomas. Selecciona tu distrito para buscar clínicas:" : "Symptoms analyzed. Select your district to search clinics:", 'ai');
+                     addMessage('', 'ai', 'district_selector'); 
                      setStep(1.3);
                  }
                  return;
@@ -394,7 +397,7 @@ export default function App() {
         } 
         else if (newFlow === 'pharmacy') {
              try {
-                const meds = await analyzeMedications(effectiveQuery, relevantSources);
+                const meds = await analyzeMedications(effectiveQuery, relevantSources, language);
                 if (sessionRef.current !== currentSession) return;
                 setPharmacyAnalysis(meds);
                 setIsTyping(false);
@@ -402,11 +405,11 @@ export default function App() {
                 triggerToast('medication');
 
                 if (hasValidLocation) {
-                     addMessage("Información encontrada. Buscando farmacias cercanas...", 'ai');
+                     addMessage(language === 'es' ? "Información encontrada. Buscando farmacias..." : "Info found. Searching pharmacies...", 'ai');
                      setStep(3);
                 } else {
-                    addMessage("Información encontrada. Para buscar farmacias cercanas, selecciona tu distrito:", 'ai');
-                    addMessage('', 'ai', 'district_selector'); // DIRECT TO DISTRICT
+                    addMessage(language === 'es' ? "Información encontrada. Selecciona tu distrito:" : "Info found. Select your district:", 'ai');
+                    addMessage('', 'ai', 'district_selector'); 
                     setStep(1.3);
                 }
                 return;
@@ -415,19 +418,20 @@ export default function App() {
         else if (newFlow === 'directory') {
              setIsTyping(false); 
              setSymptomsOrMed(result.query); 
-             addMessage(`Buscando detalles de "${result.query}"...`, 'ai');
+             addMessage(language === 'es' ? `Buscando "${result.query}"...` : `Searching "${result.query}"...`, 'ai');
              setStep(3);
              return;
         }
         else {
              setIsTyping(false);
              if (step === 0) {
-                 addMessage("Hola. Puedo ayudarte con triaje, farmacias o directorio. ¿Qué necesitas?", 'ai');
+                 addMessage(t.chat.welcomeMessage, 'ai');
              } else {
                  const response = await generateFollowUp(
                      [{role: 'user', parts: [{text: result.transcription}]}], 
                      uploadedFiles,
-                     relevantSources
+                     relevantSources,
+                     language
                  );
                  addMessage(response.text, 'ai');
              }
@@ -435,8 +439,6 @@ export default function App() {
         }
 
     } else {
-        // === CONTEXTUAL CHAT LOGIC (ONLY FOR 'CHAT' INTENT) ===
-        
         const history = [
              ...messages.map(m => ({
                 role: m.sender === 'user' ? 'user' : 'model',
@@ -446,8 +448,7 @@ export default function App() {
         ].filter(m => m.parts[0].text && !m.parts[0].text.includes('selecciona') && !m.parts[0].text.includes('Usar mi ubicación'));
 
         try {
-             // For generic chat, use relevantSources (which currently includes all active ones)
-             const response = await generateFollowUp(history, uploadedFiles, relevantSources);
+             const response = await generateFollowUp(history, uploadedFiles, relevantSources, language);
              if (sessionRef.current !== currentSession) return;
              
              setIsTyping(false);
@@ -458,7 +459,7 @@ export default function App() {
                  setStep(3); 
                  
                  if (!locationState.district && !locationState.coordinates) {
-                     addMessage("Para mostrarte el mapa, necesito tu ubicación.", 'ai', 'district_selector');
+                     addMessage(language === 'es' ? "Para mostrarte el mapa, necesito tu ubicación." : "To show the map, I need your location.", 'ai', 'district_selector');
                  }
              }
         } catch(e) { setIsTyping(false); }
@@ -472,14 +473,13 @@ export default function App() {
       try {
           const history = [
               ...assistantMessages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })),
-              // Append files if they are in the active session for context
-              ...uploadedFiles.map(f => ({ role: 'user', parts: [{ text: `[Archivo Adjunto: ${f.displayName}]` }]})),
+              ...uploadedFiles.map(f => ({ role: 'user', parts: [{ text: `[Attachment: ${f.displayName}]` }]})),
               { role: 'user', parts: [{ text: text }] }
           ];
           
           const contextData = { analysis, pharmacyAnalysis };
           
-          const response = await generateAssistantResponse(history, uploadedFiles, contextData);
+          const response = await generateAssistantResponse(history, uploadedFiles, contextData, language);
           if (sessionRef.current !== currentSession) return;
           setIsAssistantTyping(false);
           addAssistantMessage(response, 'ai');
@@ -496,7 +496,7 @@ export default function App() {
     const currentSession = sessionRef.current;
     
     if (!navigator.geolocation) {
-      addMessage("Tu navegador no soporta geolocalización.", 'ai');
+      addMessage(t.location.browserError, 'ai');
       return;
     }
 
@@ -522,36 +522,32 @@ export default function App() {
 
         setStep(3);
         
-        // 🚀 OPTIMIZATION: Fire-and-forget for cosmetic location name (parallel execution)
         const locationNamePromise = identifyLocationFromCoords(latitude, longitude);
 
         setIsLoadingResults(true); 
         
         let query = '';
-        if (flow === 'pharmacy') query = 'Farmacias y Boticas';
+        if (flow === 'pharmacy') query = language === 'es' ? 'Farmacias y Boticas' : 'Pharmacies';
         else if (flow === 'triage') query = analysis?.specialty ? `clínicas para ${analysis.specialty}` : 'centros de salud';
         else query = symptomsOrMed || 'clínicas'; 
 
-        // 🚀 OPTIMIZATION: Search immediately using coordinates (null location string)
-        const result = await searchNearbyPlaces(query, null, { lat: latitude, lng: longitude }, flow);
+        const result = await searchNearbyPlaces(query, null, { lat: latitude, lng: longitude }, flow, language);
 
         if (sessionRef.current !== currentSession) return;
 
         setDynamicCenters(result.places);
         setIsLoadingResults(false);
         
-        // Update state with success. Initially use "Tu Ubicación (GPS)" or similar until name resolves
         setLocationState({
             status: 'success',
             coordinates: { lat: latitude, lng: longitude },
-            district: "Ubicación detectada (GPS)"
+            district: "GPS"
         });
 
-        // Resolve cosmetic name in background
         locationNamePromise.then(realLocationName => {
             if (sessionRef.current === currentSession) {
                  setLocationState(prev => ({ ...prev, district: realLocationName }));
-                 addMessage(`📍 Ubicación detectada: ${realLocationName}`, 'user');
+                 addMessage(`${t.location.detected} ${realLocationName}`, 'user');
             }
         });
         
@@ -563,25 +559,19 @@ export default function App() {
             ...prev,
             status: 'error',
             error: error.code === 1 
-                ? 'Permiso de ubicación denegado.'
-                : 'No pudimos obtener tu ubicación.'
+                ? (language === 'es' ? 'Permiso denegado.' : 'Permission denied.')
+                : (language === 'es' ? 'No pudimos obtener ubicación.' : 'Location error.')
         }));
         
-        addMessage("⚠️ No pude obtener tu ubicación GPS. Por favor selecciónala manualmente.", 'ai');
+        addMessage(t.location.gpsError, 'ai');
     }
   };
 
-  const handleSelectDepartment = (deptId: string) => {
-     // Deprecated for simple Lima flow, but kept for interface compatibility
-  };
-
-  const handleSelectProvince = (provId: string) => {
-     // Deprecated for simple Lima flow, but kept for interface compatibility
-  };
+  const handleSelectDepartment = (deptId: string) => { };
+  const handleSelectProvince = (provId: string) => { };
 
   const handleSelectDistrict = (distId: string) => {
       const dist = DISTRICTS.find(d => d.id === distId);
-      // Hardcode Lima for visual context since we skipped selection
       const fullLocation = `${dist?.name}, Lima, Lima`;
       
       setLocationState({
@@ -595,9 +585,8 @@ export default function App() {
       
       setTimeout(() => {
           setIsTyping(false);
-          addMessage(`Buscando en ${fullLocation}...`, 'ai');
+          addMessage(language === 'es' ? `Buscando en ${fullLocation}...` : `Searching in ${fullLocation}...`, 'ai');
           setStep(3);
-          // NO REDIRECT
       }, 600);
   };
 
@@ -606,13 +595,15 @@ export default function App() {
   const handleContactAssistant = () => {
       if (!analysis) return;
       setIsAssistantActive(true);
-      setMobileTab('doctor'); // Use 'doctor' tab key for Assistant view on mobile
+      setMobileTab('doctor');
       setRightPanelMode('assistant');
       setIsAssistantTyping(true);
       setAssistantMessages([]);
       setTimeout(() => {
           setIsAssistantTyping(false);
-          const greeting = `Hola. Soy el Asistente Virtual de Doctoi. He revisado tu pre-análisis de ${analysis.specialty}. Si tienes exámenes de laboratorio o recetas, puedes subirlos aquí para orientarte mejor.`;
+          const greeting = language === 'es' 
+            ? `Hola. Soy el Asistente Virtual. He revisado tu análisis de ${analysis.specialty}.` 
+            : `Hello. I am the Virtual Assistant. I have reviewed your analysis for ${analysis.specialty}.`;
           addAssistantMessage(greeting, 'ai');
       }, 1000);
   }
@@ -624,7 +615,7 @@ export default function App() {
       setStep(0);
       setFlow(null);
       setMessages([
-          { id: `welcome-1-${Date.now()}`, text: 'Hola. Soy Doctoi. ¿En qué puedo ayudarte hoy?', sender: 'ai', type: 'text' },
+          { id: `welcome-1-${Date.now()}`, text: t.chat.welcomeMessage, sender: 'ai', type: 'text' },
           { id: `welcome-2-${Date.now()}`, text: '', sender: 'ai', type: 'intent_selector' }
       ]);
       setSymptomsOrMed('');
@@ -642,7 +633,6 @@ export default function App() {
       setUnreadResults(false);
       setIsTyping(false);
       
-      // Reset Assistant
       setIsAssistantActive(false);
       setAssistantMessages([]);
       setIsAssistantTyping(false);
@@ -654,9 +644,6 @@ export default function App() {
       setDynamicCenters([]);
       setToastType(null);
       setShowToast(false);
-      
-      // Reset sources to default (optional, keeping state persists selection)
-      // setKnowledgeSources(OFFICIAL_SOURCES);
   };
 
   const hasAnalysis = !!analysis || !!pharmacyAnalysis;
@@ -671,7 +658,6 @@ export default function App() {
        <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none bg-slate-50">
           <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] md:w-[500px] md:h-[500px] bg-blue-200/40 md:bg-blue-100/50 rounded-full blur-[80px] md:blur-3xl animate-blob"></div>
           
-          {/* UPDATED BACKGROUND ICON - ABSTRACT PIN */}
           <div className="absolute bottom-[-50px] right-[-50px] md:bottom-[-80px] md:right-[-80px] opacity-10 md:opacity-20 transform rotate-[-15deg] scale-150">
              <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <defs>
@@ -694,7 +680,6 @@ export default function App() {
             canInstall={!!deferredPrompt}
        />
        
-       {/* NEW MOBILE TOAST */}
        <MobileToast 
             visible={showToast} 
             type={toastType} 
@@ -781,7 +766,7 @@ export default function App() {
                                 
                                 sources={knowledgeSources}
                                 onToggleSource={handleToggleSource}
-                                onClose={handleCloseDataPanel} // Close handler
+                                onClose={handleCloseDataPanel} 
                              />
                          )}
                      </div>
@@ -873,7 +858,7 @@ export default function App() {
                             
                             sources={knowledgeSources}
                             onToggleSource={handleToggleSource}
-                            onClose={handleCloseDataPanel} // Close handler
+                            onClose={handleCloseDataPanel} 
                         />
                   </div>
               </div>
@@ -899,11 +884,11 @@ export default function App() {
              <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-enter">
                 <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-slate-100">
                     <div className="flex flex-col items-center text-center">
-                        <h3 className="text-xl font-bold text-slate-800 mb-2">¿Finalizar Consulta?</h3>
-                        <p className="text-sm text-slate-500 mb-6 leading-relaxed">Se cerrará el chat actual.</p>
+                        <h3 className="text-xl font-bold text-slate-800 mb-2">{t.chat.reset}</h3>
+                        <p className="text-sm text-slate-500 mb-6 leading-relaxed">...</p>
                         <div className="flex gap-3 w-full">
-                            <button onClick={() => setShowEndSessionConfirm(false)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">Cancelar</button>
-                            <button onClick={performReset} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition shadow-lg shadow-red-200">Finalizar</button>
+                            <button onClick={() => setShowEndSessionConfirm(false)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">{t.common.cancel}</button>
+                            <button onClick={performReset} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition shadow-lg shadow-red-200">{t.common.exit}</button>
                         </div>
                     </div>
                 </div>
@@ -912,5 +897,13 @@ export default function App() {
 
        </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <LanguageProvider>
+      <DoctoiApp />
+    </LanguageProvider>
   );
 }
