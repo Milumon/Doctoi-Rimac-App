@@ -8,7 +8,8 @@ import { DataPanel } from './components/DataPanel';
 import { DetailModal } from './components/DetailModal';
 import { MobileNavBar } from './components/MobileNavBar';
 import { MobileWelcome } from './components/MobileWelcome'; 
-import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, Doctor, RagDocument } from './types';
+import { MobileToast, ToastType } from './components/MobileToast';
+import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, Doctor, RagDocument, UrgencyLevel } from './types';
 import { doctors } from './data/doctors';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
 import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyMultimodalIntent, generateDoctorResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
@@ -60,16 +61,22 @@ export default function App() {
   const [dynamicCenters, setDynamicCenters] = useState<MedicalCenter[]>([]);
   const [isLoadingResults, setIsLoadingResults] = useState(false);
 
+  // MOBILE STATE
+  const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
+  const [unreadAnalysis, setUnreadAnalysis] = useState(false);
+  const [unreadResults, setUnreadResults] = useState(false);
+  const [showMobileWelcome, setShowMobileWelcome] = useState(true);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  
+  // TOAST STATE
+  const [toastType, setToastType] = useState<ToastType>(null);
+  const [showToast, setShowToast] = useState(false);
+
   // MODAL STATES
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false); 
 
   // Session control
   const sessionRef = useRef(0);
-  
-  // Mobile PWA State
-  const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
-  const [showMobileWelcome, setShowMobileWelcome] = useState(true);
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   const [symptomsOrMed, setSymptomsOrMed] = useState(''); 
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
@@ -100,20 +107,31 @@ export default function App() {
       }
   }, [uploadedFiles]);
 
+  // Clear unread flags when switching tabs
+  useEffect(() => {
+      if (mobileTab === 'analysis') { setUnreadAnalysis(false); setShowToast(false); }
+      if (mobileTab === 'results') { setUnreadResults(false); setShowToast(false); }
+  }, [mobileTab]);
+
+  const triggerToast = (type: ToastType) => {
+      setToastType(type);
+      setShowToast(true);
+  };
+
+  const handleToastNavigate = () => {
+      if (toastType === 'triage' || toastType === 'medication') setMobileTab('analysis');
+      if (toastType === 'places') setMobileTab('results');
+  }
+
   // ===================== CORE LOGIC: TRIGGER MAPS SEARCH =====================
-  // This effect now ONLY handles manual updates (when locationState is idle/success but not processing GPS)
   useEffect(() => {
     const performDynamicSearch = async () => {
         const isDirectoryMode = flow === 'directory';
         
-        // Skip if we are in the middle of a controlled GPS flow to avoid race conditions
         if (locationState.status === 'requesting' || locationState.status === 'searching') return;
 
-        // Use locationState or fallback to manual selection logic
         const currentDistrict = locationState.district; 
         const currentCoords = locationState.coordinates || undefined;
-
-        // CRITICAL: Ensure we have a query AND (Location OR Directory Mode)
         const hasLocation = !!currentDistrict || !!currentCoords;
         const hasQuery = !!symptomsOrMed || !!analysis || (flow === 'pharmacy' && !!pharmacyAnalysis);
 
@@ -127,15 +145,24 @@ export default function App() {
             else query = symptomsOrMed || 'clínicas'; 
 
             setIsLoadingResults(true);
+            setIsTyping(true); // Show typing while searching maps
             setDynamicCenters([]); 
 
             const searchLocation = currentDistrict || (isDirectoryMode ? 'Lima, Peru' : '');
-
             const result = await searchNearbyPlaces(query, searchLocation, currentCoords, flow);
             
             if (sessionRef.current === currentSessionId) {
                 setDynamicCenters(result.places);
                 setIsLoadingResults(false);
+                setIsTyping(false); // Stop typing when results arrive
+                
+                // Trigger notification if user is not on results tab
+                if (result.places.length > 0 && mobileTab !== 'results') {
+                    setUnreadResults(true);
+                    triggerToast('places');
+                }
+            } else {
+                setIsTyping(false);
             }
         }
     };
@@ -175,16 +202,16 @@ export default function App() {
   const handleSelectIntent = (selectedFlow: 'triage' | 'pharmacy' | 'directory') => {
       const currentSession = sessionRef.current;
       
-      // === RESET STATE PARTIALLY (Keep Location) ===
       setFlow(selectedFlow);
-      // NOTE: We do NOT reset locationState here anymore
-      // setLocationState({ status: 'idle', coordinates: null, district: '' });
       setDynamicCenters([]);     
       setAnalysis(null);
       setPharmacyAnalysis(null);         
       setSymptomsOrMed('');      
       setStep(0);                
       setMobileTab('chat');
+      setUnreadAnalysis(false);
+      setUnreadResults(false);
+      setShowToast(false);
       
       let intentText = '';
       if (selectedFlow === 'pharmacy') intentText = 'Busco medicamentos';
@@ -249,94 +276,93 @@ export default function App() {
         setIsTyping(true);
     }
     
-    // --- 2. MULTIMODAL CLASSIFICATION ROUTER ---
-    // Runs if: Audio input OR Free Text Input at Start (Step 0)
-    if (audio || step === 0) {
+    // --- 2. MULTIMODAL CLASSIFICATION ROUTER (RUNS FOR AUDIO OR STEP 0 OR STEP 1) ---
+    // If Step 3, we use 'Chat' mode below. For everything else (Initial, Input, Audio), we verify intent.
+    if (audio || step === 0 || step === 1) {
         const input = audio ? audio : text;
         const result = await classifyMultimodalIntent(input);
         
         if (sessionRef.current !== currentSession) return;
 
-        // If audio, show what the AI heard
-        if (audio) {
-            addMessage(`🎤 "${result.transcription}"`, 'user');
-        }
+        if (audio) addMessage(`🎤 "${result.transcription}"`, 'user');
 
-        // Apply Global Reset on Intent Change
-        setFlow(result.intent as any); 
+        // FORCE FLOW UPDATE based on classifier, overriding previous selection if needed
+        const newFlow = result.intent as Flow;
+        setFlow(newFlow); 
         setSymptomsOrMed(result.query || result.transcription);
+        
         setMobileTab('chat');
         setDynamicCenters([]);
-        setAnalysis(null);
-        setPharmacyAnalysis(null);
         
-        // ** LOCATION HANDLING **
-        // If the AI detected a location in the voice/text (e.g., "in San Borja"), update state
+        // Reset analysis based on new flow to avoid stale data
+        if (newFlow !== 'triage') setAnalysis(null);
+        if (newFlow !== 'pharmacy') setPharmacyAnalysis(null);
+        
         if (result.detectedLocation) {
-             setLocationState({
-                 status: 'success',
-                 district: result.detectedLocation,
-                 coordinates: null
-             });
+             setLocationState({ status: 'success', district: result.detectedLocation, coordinates: null });
              addMessage(`📍 Ubicación detectada en mensaje: ${result.detectedLocation}`, 'ai');
         }
 
-        // Check if we have a valid location now (either pre-existing or just detected)
         const hasValidLocation = !!locationState.district || !!result.detectedLocation || !!locationState.coordinates;
 
-        // --- ROUTING LOGIC ---
-        if (result.intent === 'triage') {
+        if (newFlow === 'triage') {
              try {
                  const triageResult = await analyzeSymptoms(result.transcription);
                  if (sessionRef.current !== currentSession) return;
                  setAnalysis(triageResult);
                  setIsTyping(false);
+                 setUnreadAnalysis(true);
+                 triggerToast('triage');
                  
-                 // Smart Jump: If we have location, skip selector
                  if (hasValidLocation) {
-                     addMessage("He analizado tus síntomas. Buscando centros cercanos...", 'ai');
+                     addMessage("He analizado tus síntomas. Procedo a buscar centros médicos...", 'ai');
                      setStep(3);
-                     setMobileTab('results');
+                     
+                     // === MOBILE UX FIX: ONLY REDIRECT IF EMERGENCY ===
+                     const isEmergency = triageResult.urgency === UrgencyLevel.EMERGENCY || triageResult.urgency === UrgencyLevel.HIGH;
+                     if (isEmergency) {
+                         setMobileTab('results');
+                     }
+                     // Else stay in chat
                  } else {
-                     addMessage("He analizado tus síntomas. Ahora, selecciona tu Departamento para ubicarte:", 'ai');
+                     addMessage("He analizado tus síntomas. Por favor, selecciona tu Departamento para ubicarte:", 'ai');
                      addMessage('', 'ai', 'department_selector');
                      setStep(1.1);
-                     setMobileTab('analysis');
                  }
                  return;
              } catch(e) {}
         } 
-        else if (result.intent === 'pharmacy') {
+        else if (newFlow === 'pharmacy') {
              try {
                 const meds = await analyzeMedications(result.transcription);
                 if (sessionRef.current !== currentSession) return;
                 setPharmacyAnalysis(meds);
                 setIsTyping(false);
+                setUnreadAnalysis(true);
+                triggerToast('medication');
 
-                // Smart Jump
                 if (hasValidLocation) {
                      addMessage("Información encontrada. Buscando farmacias cercanas...", 'ai');
                      setStep(3);
-                     setMobileTab('results');
+                     // NO REDIRECT
                 } else {
-                    addMessage("He encontrado información del medicamento. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
+                    addMessage("Información encontrada. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
                     addMessage('', 'ai', 'department_selector');
                     setStep(1.1);
-                    setMobileTab('analysis');
                 }
                 return;
              } catch(e) {}
         }
-        else if (result.intent === 'directory') {
-             setIsTyping(false);
+        else if (newFlow === 'directory') {
+             // Let the useEffect handle isTyping=true for the search
+             setIsTyping(false); 
              setSymptomsOrMed(result.query); 
              addMessage(`Buscando detalles de "${result.query}"...`, 'ai');
              setStep(3);
-             setMobileTab('results');
+             // NO REDIRECT
              return;
         }
         else {
-             // 'chat' intent or fallback
              setIsTyping(false);
              if (step === 0) {
                  addMessage("Hola. Puedo ayudarte con triaje, farmacias o directorio. ¿Qué necesitas?", 'ai');
@@ -348,67 +374,7 @@ export default function App() {
         }
     }
 
-    // --- 3. EXPLICIT STEP LOGIC (If user is manually in a flow) ---
-    
-    // Step 1: User inputs symptoms/medication/query MANUALLY (Not audio, not Step 0)
-    if (step === 1 && !audio) {
-        setSymptomsOrMed(text);
-        // Check pre-existing location
-        const hasValidLocation = !!locationState.district || !!locationState.coordinates;
-        
-        if (flow === 'triage') {
-             try {
-                 const result = await analyzeSymptoms(text);
-                 if (sessionRef.current !== currentSession) return;
-                 setAnalysis(result);
-                 setIsTyping(false);
-                 
-                 if (hasValidLocation) {
-                     addMessage("Análisis completo. Buscando clínicas...", 'ai');
-                     setStep(3);
-                     setMobileTab('results');
-                 } else {
-                     addMessage("He analizado tus síntomas. Selecciona tu Departamento:", 'ai');
-                     addMessage('', 'ai', 'department_selector');
-                     setStep(1.1); 
-                     setMobileTab('analysis');
-                 }
-                 return;
-             } catch (e) {}
-        } 
-        
-        if (flow === 'pharmacy') {
-            try {
-                setAnalysis(null); 
-                const meds = await analyzeMedications(text);
-                if (sessionRef.current !== currentSession) return;
-                setPharmacyAnalysis(meds);
-                setIsTyping(false);
-
-                if (hasValidLocation) {
-                     addMessage("Buscando farmacias...", 'ai');
-                     setStep(3);
-                     setMobileTab('results');
-                } else {
-                    addMessage("Resumen listo. Confirma tu ubicación:", 'ai');
-                    addMessage('', 'ai', 'department_selector');
-                    setStep(1.1);
-                    setMobileTab('analysis');
-                }
-                return;
-            } catch (e) {}
-        }
-
-        if (flow === 'directory') {
-             setIsTyping(false);
-             addMessage(`Buscando detalles de "${text}"...`, 'ai');
-             setStep(3);
-             setMobileTab('results');
-             return;
-        }
-    } 
-
-    // Step 3: ACTION-DRIVEN ACTIVE CHAT
+    // --- 3. CHAT MODE (STEP 3) ---
     else if (step === 3 && !audio) {
         const history = [
              ...messages.map(m => ({
@@ -419,22 +385,18 @@ export default function App() {
         ].filter(m => m.parts[0].text && !m.parts[0].text.includes('selecciona') && !m.parts[0].text.includes('Usar mi ubicación'));
 
         try {
-             // New GenerateFollowUp returns JSON { text, action, query }
              const response = await generateFollowUp(history, uploadedFiles);
              if (sessionRef.current !== currentSession) return;
              
              setIsTyping(false);
              addMessage(response.text, 'ai');
 
-             // AUTOMATED ACTION HANDLER
              if (response.action === 'SEARCH_MAPS') {
-                 // Force switch to map view
                  if (response.query) setSymptomsOrMed(response.query);
                  setStep(3);
-                 setMobileTab('results');
                  
-                 // If we have location, the useEffect will trigger the search automatically
-                 // If not, we might need to prompt
+                 // NO REDIRECT. Toast handled by effect when results arrive.
+                 
                  if (!locationState.district && !locationState.coordinates) {
                      addMessage("Para mostrarte el mapa, necesito tu ubicación.", 'ai', 'department_selector');
                  }
@@ -460,7 +422,6 @@ export default function App() {
       } catch (e) { setIsDoctorTyping(false); }
   };
 
-  // ✅ REFACTORED: Single Source of Truth for GPS Logic
   const handleRequestLocation = async () => {
     const currentSession = sessionRef.current;
     
@@ -470,10 +431,8 @@ export default function App() {
     }
 
     try {
-        // STEP 1: Requesting
         setLocationState(prev => ({ ...prev, status: 'requesting', error: undefined }));
         
-        // Wait for GPS (Async)
         const position = await new Promise<GeolocationPosition>((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, { 
                 timeout: 10000, 
@@ -485,25 +444,21 @@ export default function App() {
         
         const { latitude, longitude } = position.coords;
 
-        // STEP 2: Reverse Geocoding (Status: Searching)
-        // We set coordinates here so the UI can show "Checking map..."
         setLocationState(prev => ({ 
             ...prev, 
             status: 'searching', 
             coordinates: { lat: latitude, lng: longitude } 
         }));
 
-        // Move tabs to results immediately to show the progress UI
         setStep(3);
-        setMobileTab('results');
         
-        // Use Gemini service for reverse geocoding
+        // NO REDIRECT
+        
         const realLocationName = await identifyLocationFromCoords(latitude, longitude);
         
         if (sessionRef.current !== currentSession) return;
 
-        // STEP 3: Execute Search (Sequential)
-        setIsLoadingResults(true); // Keep legacy loading for the list
+        setIsLoadingResults(true); 
         
         let query = '';
         if (flow === 'pharmacy') query = 'Farmacias y Boticas';
@@ -514,7 +469,6 @@ export default function App() {
 
         if (sessionRef.current !== currentSession) return;
 
-        // STEP 4: Success (Single Update)
         setLocationState({
             status: 'success',
             coordinates: { lat: latitude, lng: longitude },
@@ -524,7 +478,7 @@ export default function App() {
         setDynamicCenters(result.places);
         setIsLoadingResults(false);
         addMessage(`📍 Ubicación detectada: ${realLocationName}`, 'user');
-
+        
     } catch (error: any) {
         if (sessionRef.current !== currentSession) return;
         console.error("GPS Error", error);
@@ -573,7 +527,6 @@ export default function App() {
       const prov = PROVINCES.find(p => p.id === selectedProvinceId);
       const fullLocation = `${dist?.name}, ${prov?.name}, ${dept?.name}`;
       
-      // Manual selection flow updates locationState to success directly
       setLocationState({
           status: 'success',
           district: fullLocation,
@@ -587,7 +540,7 @@ export default function App() {
           setIsTyping(false);
           addMessage(`Buscando en ${fullLocation}...`, 'ai');
           setStep(3);
-          setMobileTab('results');
+          // NO REDIRECT
       }, 600);
   };
 
@@ -621,7 +574,6 @@ export default function App() {
       setSelectedDepartmentId('');
       setSelectedProvinceId('');
       
-      // Reset Location State
       setLocationState({ status: 'idle', coordinates: null, district: '' });
       
       setInsurance('Sin Seguro');
@@ -629,6 +581,8 @@ export default function App() {
       setPharmacyAnalysis(null);
       setSelectedCenter(null);
       setMobileTab('chat');
+      setUnreadAnalysis(false);
+      setUnreadResults(false);
       setIsTyping(false);
       setCurrentDoctor(null);
       setDoctorMessages([]);
@@ -637,6 +591,8 @@ export default function App() {
       setUploadedFiles([]); 
       getActiveFilesFromGemini().then(setUploadedFiles);
       setDynamicCenters([]);
+      setToastType(null);
+      setShowToast(false);
   };
 
   const hasAnalysis = !!analysis || !!pharmacyAnalysis;
@@ -644,7 +600,6 @@ export default function App() {
   const hasDoctor = !!currentDoctor;
   const hasData = uploadedFiles.length > 0 || rightPanelMode === 'data';
 
-  // Determine if Analysis Panel should be visible
   const showAnalysisPanel = rightPanelMode !== 'data' && flow !== 'directory';
 
   return (
@@ -676,6 +631,14 @@ export default function App() {
             onInstall={handleInstallApp}
             canInstall={!!deferredPrompt}
        />
+       
+       {/* NEW MOBILE TOAST */}
+       <MobileToast 
+            visible={showToast} 
+            type={toastType} 
+            onClose={() => setShowToast(false)} 
+            onNavigate={handleToastNavigate}
+       />
 
        <main className="w-full h-full md:max-w-7xl md:h-[75vh] relative z-10">
           <div className="hidden lg:grid grid-cols-12 gap-6 h-full min-h-0">
@@ -690,9 +653,9 @@ export default function App() {
                  onReset={handleReset}
                  onRequestLocation={handleRequestLocation}
                  onShowData={handleShowData}
+                 onNavigate={setMobileTab}
                  isTyping={isTyping}
                  
-                 // Pass full location state
                  locationState={locationState}
                  
                  currentStep={step}
@@ -706,7 +669,6 @@ export default function App() {
                  <HeroSection />
              ) : (
                  <>
-                     {/* Analysis Panel handles both Triage and Pharmacy */}
                      {showAnalysisPanel && (
                         <AnalysisPanel 
                             analysis={analysis} 
@@ -727,14 +689,13 @@ export default function App() {
                                 query={symptomsOrMed}
                                 onRequestLocation={handleRequestLocation}
                                 
-                                // Pass full location state
                                 locationState={locationState}
                                 
                                 onSetLocation={(dist) => setLocationState(prev => ({ ...prev, district: dist, status: 'success' }))}
                                 onSetInsurance={setInsurance}
                                 dynamicResults={dynamicCenters}
                                 isLoading={isLoadingResults}
-                                triageUrgency={analysis?.urgency} // Pass urgency to trigger Emergency Mode
+                                triageUrgency={analysis?.urgency} 
                             />
                          )}
                          {rightPanelMode === 'doctor' && currentDoctor && (
@@ -773,9 +734,9 @@ export default function App() {
                             onReset={handleReset}
                             onRequestLocation={handleRequestLocation}
                             onShowData={handleShowData}
+                            onNavigate={setMobileTab}
                             isTyping={isTyping}
                             
-                            // Pass full location state
                             locationState={locationState}
                             
                             currentStep={step}
@@ -808,7 +769,6 @@ export default function App() {
                                 query={symptomsOrMed}
                                 onRequestLocation={handleRequestLocation}
                                 
-                                // Pass full location state
                                 locationState={locationState}
                                 
                                 onSetLocation={(dist) => setLocationState(prev => ({ ...prev, district: dist, status: 'success' }))}
@@ -849,6 +809,8 @@ export default function App() {
                 hasResults={step === 3}
                 hasDoctor={hasDoctor}
                 hasData={uploadedFiles.length > 0 || mobileTab === 'data'}
+                unreadAnalysis={unreadAnalysis}
+                unreadResults={unreadResults}
               />
           </div>
 

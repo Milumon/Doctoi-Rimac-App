@@ -125,7 +125,8 @@ export const analyzeSymptoms = async (input: string | { mimeType: string, data: 
             RULES:
             1. Return JSON.
             2. If input is clearly not symptoms (e.g. "Hello", "Weather"), return confidence: 0.
-            3. Otherwise, provide a best-effort analysis.`
+            3. CRITICAL: If the user says "Me muero" (I'm dying), "No puedo respirar", "Ayuda", "Emergencia" or indicates severe distress, you MUST set urgency to 'Emergencia'.
+            4. Otherwise, provide a best-effort analysis.`
           }
         });
 
@@ -187,10 +188,16 @@ export const classifyMultimodalIntent = async (input: string | { mimeType: strin
                         required: ["intent", "transcription", "query"]
                     },
                     systemInstruction: `You are an intent router for a health app.
-                    - 'triage': User describes symptoms ("Me duele la cabeza", "Tengo fiebre").
-                    - 'pharmacy': User asks for medication price, stock, or location ("Donde compro Panadol", "Precio de Amoxicilina", "Farmacias cerca").
-                    - 'directory': User asks for a SPECIFIC clinic/hospital location ("Donde esta la Clinica Delgado", "Busco el Hospital Rebagliati").
-                    - 'chat': Greetings, noise, or general questions not related to finding health services.
+                    
+                    CLASSIFICATION RULES:
+                    1. 'triage': User describes symptoms ("Me duele", "Tengo fiebre") OR EXTREME DISTRESS ("Me muero", "Ayuda", "Emergencia", "Me siento mal").
+                    2. 'pharmacy': User asks for MEDICATION names ("Donde compro Panadol", "Precio de Amoxicilina") or explicit "Farmacia".
+                    3. 'directory': User asks for a SPECIFIC clinic/hospital location BY NAME ("Donde esta la Clinica Delgado", "Hospital Rebagliati").
+                    4. 'chat': Greetings, noise, or general questions not related to finding health services.
+                    
+                    CRITICAL OVERRIDES:
+                    - "Me muero" / "Ayuda" -> ALWAYS 'triage'.
+                    - "Clinica" / "Hospital" -> NEVER 'pharmacy'. If specific name, 'directory'. If general ("Busco una clinica"), 'triage' (to find appropriate one) or 'directory'.
                     
                     EXTRACT LOCATION: If the user mentions a district or city (e.g. "en San Isidro", "por Surco"), put it in 'detectedLocation'.`
                 }

@@ -8,9 +8,20 @@ interface MobileNavBarProps {
   hasResults: boolean;
   hasDoctor: boolean;
   hasData?: boolean;
+  unreadAnalysis?: boolean;
+  unreadResults?: boolean;
 }
 
-export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActiveTab, hasAnalysis, hasResults, hasDoctor, hasData }) => {
+export const MobileNavBar: React.FC<MobileNavBarProps> = ({ 
+    activeTab, 
+    setActiveTab, 
+    hasAnalysis, 
+    hasResults, 
+    hasDoctor, 
+    hasData,
+    unreadAnalysis = false,
+    unreadResults = false
+}) => {
   return (
     <div className="lg:hidden w-full h-20 bg-white/95 backdrop-blur-xl rounded-t-[2rem] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] border-t border-slate-100 z-50 flex items-center justify-around px-2 flex-shrink-0">
       
@@ -28,10 +39,19 @@ export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActive
       <button 
         onClick={() => hasAnalysis && setActiveTab('analysis')}
         disabled={!hasAnalysis}
-        className={`flex flex-col items-center justify-center w-16 h-full transition-all duration-300 ${activeTab === 'analysis' ? 'text-emerald-600 -translate-y-1' : (hasAnalysis ? 'text-slate-400 hover:text-slate-600' : 'text-slate-200 cursor-not-allowed')}`}
+        className={`flex flex-col items-center justify-center w-16 h-full transition-all duration-300 relative ${activeTab === 'analysis' ? 'text-emerald-600 -translate-y-1' : (hasAnalysis ? 'text-slate-400 hover:text-slate-600' : 'text-slate-200 cursor-not-allowed')}`}
       >
          <div className={`p-1.5 rounded-xl mb-0.5 transition-colors relative ${activeTab === 'analysis' ? 'bg-emerald-100' : 'bg-transparent'}`}>
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            
+            {/* UNREAD INDICATOR */}
+            {hasAnalysis && unreadAnalysis && activeTab !== 'analysis' && (
+                <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500 border-2 border-white"></span>
+                </span>
+            )}
+            
             {!hasAnalysis && <div className="absolute top-1 right-1 w-2 h-2 bg-slate-200 rounded-full border border-white"></div>}
         </div>
         <span className="text-[10px] font-bold">Análisis</span>
@@ -41,10 +61,19 @@ export const MobileNavBar: React.FC<MobileNavBarProps> = ({ activeTab, setActive
       <button 
         onClick={() => hasResults && setActiveTab('results')}
         disabled={!hasResults}
-        className={`flex flex-col items-center justify-center w-16 h-full transition-all duration-300 ${activeTab === 'results' ? 'text-indigo-600 -translate-y-1' : (hasResults ? 'text-slate-400 hover:text-slate-600' : 'text-slate-200 cursor-not-allowed')}`}
+        className={`flex flex-col items-center justify-center w-16 h-full transition-all duration-300 relative ${activeTab === 'results' ? 'text-indigo-600 -translate-y-1' : (hasResults ? 'text-slate-400 hover:text-slate-600' : 'text-slate-200 cursor-not-allowed')}`}
       >
          <div className={`p-1.5 rounded-xl mb-0.5 transition-colors relative ${activeTab === 'results' ? 'bg-indigo-100' : 'bg-transparent'}`}>
              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+             
+             {/* UNREAD INDICATOR */}
+             {hasResults && unreadResults && activeTab !== 'results' && (
+                <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-500 border-2 border-white"></span>
+                </span>
+             )}
+             
              {!hasResults && <div className="absolute top-1 right-1 w-2 h-2 bg-slate-200 rounded-full border border-white"></div>}
          </div>
         <span className="text-[10px] font-bold">Lugares</span>
