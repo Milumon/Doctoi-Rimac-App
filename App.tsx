@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { HeroSection } from './components/HeroSection';
@@ -9,10 +8,10 @@ import { DataPanel } from './components/DataPanel';
 import { DetailModal } from './components/DetailModal';
 import { MobileNavBar } from './components/MobileNavBar';
 import { MobileWelcome } from './components/MobileWelcome'; 
-import { Message, TriageAnalysis, MedicalCenter, Doctor, RagDocument } from './types';
+import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, Doctor, RagDocument } from './types';
 import { doctors } from './data/doctors';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
-import { analyzeSymptoms, generateFollowUp, classifyUserIntent, generateDoctorResponse, explainMedication, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
+import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyUserIntent, generateDoctorResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
 
 // Steps: 
 // 0 = Intent Selection (Or free text input)
@@ -22,6 +21,15 @@ type Step = 0 | 1 | 1.1 | 1.2 | 1.3 | 1.5 | 2 | 3;
 type Flow = 'triage' | 'pharmacy' | 'directory' | null;
 type MobileTab = 'chat' | 'analysis' | 'results' | 'doctor' | 'data';
 
+// FSM for Location
+export type LocationStatus = 'idle' | 'requesting' | 'searching' | 'success' | 'error';
+export interface LocationState {
+  status: LocationStatus;
+  coordinates: { lat: number; lng: number } | null;
+  district: string;
+  error?: string;
+}
+
 export default function App() {
   const [step, setStep] = useState<Step>(0);
   const [flow, setFlow] = useState<Flow>(null);
@@ -30,7 +38,13 @@ export default function App() {
     { id: '2', text: '', sender: 'ai', type: 'intent_selector' }
   ]);
   const [isTyping, setIsTyping] = useState(false);
-  const [isRequestingLocation, setIsRequestingLocation] = useState(false);
+  
+  // NEW: Unified Location State
+  const [locationState, setLocationState] = useState<LocationState>({
+      status: 'idle',
+      coordinates: null,
+      district: ''
+  });
   
   // DOCTOR CHAT STATE
   const [doctorMessages, setDoctorMessages] = useState<Message[]>([]);
@@ -61,13 +75,10 @@ export default function App() {
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
   const [selectedProvinceId, setSelectedProvinceId] = useState('');
   
-  // Store user coordinates if available for better Grounding
-  const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
-  const [district, setDistrict] = useState(''); // This now holds the display string or manually selected location
-  
   const [insurance, setInsurance] = useState('Sin Seguro');
   
   const [analysis, setAnalysis] = useState<TriageAnalysis | null>(null);
+  const [pharmacyAnalysis, setPharmacyAnalysis] = useState<MedicineInfo[] | null>(null);
   const [selectedCenter, setSelectedCenter] = useState<MedicalCenter | null>(null);
 
   // Initial Data Load
@@ -90,20 +101,26 @@ export default function App() {
   }, [uploadedFiles]);
 
   // ===================== CORE LOGIC: TRIGGER MAPS SEARCH =====================
+  // This effect now ONLY handles manual updates (when locationState is idle/success but not processing GPS)
   useEffect(() => {
     const performDynamicSearch = async () => {
         const isDirectoryMode = flow === 'directory';
         
+        // Skip if we are in the middle of a controlled GPS flow to avoid race conditions
+        if (locationState.status === 'requesting' || locationState.status === 'searching') return;
+
+        // Use locationState or fallback to manual selection logic
+        const currentDistrict = locationState.district; 
+        const currentCoords = locationState.coordinates || undefined;
+
         // CRITICAL: Ensure we have a query AND (Location OR Directory Mode)
-        const hasLocation = !!district || !!userCoords;
-        const hasQuery = !!symptomsOrMed || !!analysis;
+        const hasLocation = !!currentDistrict || !!currentCoords;
+        const hasQuery = !!symptomsOrMed || !!analysis || (flow === 'pharmacy' && !!pharmacyAnalysis);
 
         if (step === 3 && flow && hasQuery && (hasLocation || isDirectoryMode)) {
             
             let query = '';
             if (flow === 'pharmacy') {
-                // FIXED: Just search for pharmacies in general, do NOT include the medication name
-                // as we cannot verify stock via Maps API.
                 query = 'Farmacias y Boticas';
             }
             else if (flow === 'triage') query = analysis?.specialty ? `clínicas para ${analysis.specialty}` : 'centros de salud';
@@ -112,10 +129,9 @@ export default function App() {
             setIsLoadingResults(true);
             setDynamicCenters([]); 
 
-            // Directory mode uses 'Lima, Peru' as default if no location selected yet
-            const searchLocation = district || (isDirectoryMode ? 'Lima, Peru' : '');
+            const searchLocation = currentDistrict || (isDirectoryMode ? 'Lima, Peru' : '');
 
-            const result = await searchNearbyPlaces(query, searchLocation, userCoords, flow);
+            const result = await searchNearbyPlaces(query, searchLocation, currentCoords, flow);
             
             if (sessionRef.current === currentSessionId) {
                 setDynamicCenters(result.places);
@@ -126,7 +142,7 @@ export default function App() {
     
     const currentSessionId = sessionRef.current;
     performDynamicSearch();
-  }, [step, district, userCoords, flow, symptomsOrMed, analysis]); 
+  }, [step, locationState.district, locationState.coordinates, flow, symptomsOrMed, analysis, pharmacyAnalysis, locationState.status]); 
 
   // PWA Install
   useEffect(() => {
@@ -161,10 +177,10 @@ export default function App() {
       
       // === RESET STATE to prevent old data from appearing ===
       setFlow(selectedFlow);
-      setDistrict('');           
-      setUserCoords(undefined);  
+      setLocationState({ status: 'idle', coordinates: null, district: '' });
       setDynamicCenters([]);     
-      setAnalysis(null);         
+      setAnalysis(null);
+      setPharmacyAnalysis(null);         
       setSymptomsOrMed('');      
       setStep(0);                
       setMobileTab('chat');
@@ -181,7 +197,7 @@ export default function App() {
           if (sessionRef.current !== currentSession) return;
           setIsTyping(false);
           if (selectedFlow === 'pharmacy') {
-              addMessage("Entendido. ¿Cuál es el nombre del medicamento?", 'ai');
+              addMessage("Entendido. ¿Qué medicamento(s) buscas?", 'ai');
           } else if (selectedFlow === 'directory') {
               addMessage("¿Qué clínica, hospital o centro médico buscas?", 'ai');
           } else {
@@ -240,9 +256,10 @@ export default function App() {
         setFlow(detectedIntent);
         setSymptomsOrMed(text); 
         setMobileTab('chat');
-        setDistrict('');
+        setLocationState({ status: 'idle', coordinates: null, district: '' });
         setDynamicCenters([]);
-        setAnalysis(null); // Ensure no old analysis sticks
+        setAnalysis(null); 
+        setPharmacyAnalysis(null);
 
         if (detectedIntent === 'triage') {
              try {
@@ -258,13 +275,14 @@ export default function App() {
              } catch(e) {}
         } else if (detectedIntent === 'pharmacy') {
              try {
-                const explanation = await explainMedication(text);
+                const meds = await analyzeMedications(text);
                 if (sessionRef.current !== currentSession) return;
+                setPharmacyAnalysis(meds);
                 setIsTyping(false);
-                addMessage(explanation, 'ai');
-                addMessage("Entendido. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
+                addMessage("He encontrado información. Para buscar farmacias cercanas, selecciona tu Departamento:", 'ai');
                 addMessage('', 'ai', 'department_selector');
                 setStep(1.1);
+                setMobileTab('analysis');
                 return;
              } catch(e) {}
         } 
@@ -290,7 +308,6 @@ export default function App() {
                  const result = await analyzeSymptoms(input);
                  if (sessionRef.current !== currentSession) return;
 
-                 // Logic updated to accept confidence > 5 (fail open)
                  if (result.confidence < 5 && result.detectedSymptoms.length === 0) {
                      setIsTyping(false);
                      addMessage("Sigo sin detectar síntomas claros. Intenta decir: 'Me duele la cabeza' o 'Tengo fiebre'.", 'ai');
@@ -300,7 +317,6 @@ export default function App() {
                  setAnalysis(result);
                  setIsTyping(false);
                  
-                 // CRITICAL FIX: Direct to Location Selection
                  addMessage("He analizado tus síntomas. Ahora, selecciona tu Departamento para ubicarte:", 'ai');
                  addMessage('', 'ai', 'department_selector');
                  setStep(1.1); 
@@ -316,16 +332,16 @@ export default function App() {
         // PHARMACY FLOW
         if (flow === 'pharmacy' && !audio) {
             try {
-                setAnalysis(null); // Ensure no analysis panel
-                const explanation = await explainMedication(text);
+                setAnalysis(null); 
+                const meds = await analyzeMedications(text);
                 if (sessionRef.current !== currentSession) return;
-                setIsTyping(false);
-                addMessage(explanation, 'ai');
                 
-                // CRITICAL FIX: Direct to Location Selection
-                addMessage("Confirma tu ubicación seleccionando tu Departamento:", 'ai');
+                setPharmacyAnalysis(meds);
+                setIsTyping(false);
+                addMessage("He preparado un resumen farmacéutico. Confirma tu ubicación:", 'ai');
                 addMessage('', 'ai', 'department_selector');
                 setStep(1.1);
+                setMobileTab('analysis');
                 return;
             } catch (e) { setIsTyping(false); }
         }
@@ -341,7 +357,7 @@ export default function App() {
     } 
     // Step 1.5: Manual Location Fallback (Chat based)
     else if (step === 1.5 && !audio) {
-        setDistrict(text);
+        setLocationState({ status: 'success', district: text, coordinates: null });
         setTimeout(() => {
             if (sessionRef.current !== currentSession) return;
             setIsTyping(false);
@@ -352,7 +368,6 @@ export default function App() {
     }
     // Step 3: Follow up chat
     else if (step === 3) {
-        // ... Follow up logic ...
         const history = [
              ...messages.map(m => ({
                 role: m.sender === 'user' ? 'user' : 'model',
@@ -387,45 +402,85 @@ export default function App() {
       } catch (e) { setIsDoctorTyping(false); }
   };
 
-  const handleRequestLocation = () => {
+  // ✅ REFACTORED: Single Source of Truth for GPS Logic
+  const handleRequestLocation = async () => {
     const currentSession = sessionRef.current;
+    
     if (!navigator.geolocation) {
       addMessage("Tu navegador no soporta geolocalización.", 'ai');
       return;
     }
-    setIsRequestingLocation(true);
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        if (sessionRef.current !== currentSession) return;
-        const { latitude, longitude } = position.coords;
-        setUserCoords({ lat: latitude, lng: longitude });
+
+    try {
+        // STEP 1: Requesting
+        setLocationState(prev => ({ ...prev, status: 'requesting', error: undefined }));
         
-        // Initial feedback
-        setDistrict("Detectando nombre de zona...");
-        setIsRequestingLocation(false);
-        addMessage(`📍 GPS detectado. Identificando zona...`, 'user');
+        // Wait for GPS (Async)
+        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, { 
+                timeout: 10000, 
+                enableHighAccuracy: true 
+            });
+        });
+
+        if (sessionRef.current !== currentSession) return;
+        
+        const { latitude, longitude } = position.coords;
+
+        // STEP 2: Reverse Geocoding (Status: Searching)
+        // We set coordinates here so the UI can show "Checking map..."
+        setLocationState(prev => ({ 
+            ...prev, 
+            status: 'searching', 
+            coordinates: { lat: latitude, lng: longitude } 
+        }));
+
+        // Move tabs to results immediately to show the progress UI
         setStep(3);
         setMobileTab('results');
-
-        // Parallel Process: Reverse Geocoding to get real name
-        try {
-            const realLocationName = await identifyLocationFromCoords(latitude, longitude);
-            if (sessionRef.current === currentSession) {
-                setDistrict(realLocationName); // Updates the ResultsPanel label
-            }
-        } catch (e) {
-             if (sessionRef.current === currentSession) {
-                setDistrict("Tu Ubicación (GPS)");
-             }
-        }
-      },
-      (error) => {
+        
+        // Use Gemini service for reverse geocoding
+        const realLocationName = await identifyLocationFromCoords(latitude, longitude);
+        
         if (sessionRef.current !== currentSession) return;
-        setIsRequestingLocation(false);
-        addMessage("No pude obtener tu ubicación GPS. Por favor selecciónala manualmente.", 'ai');
-      },
-      { timeout: 10000, enableHighAccuracy: true }
-    );
+
+        // STEP 3: Execute Search (Sequential)
+        setIsLoadingResults(true); // Keep legacy loading for the list
+        
+        let query = '';
+        if (flow === 'pharmacy') query = 'Farmacias y Boticas';
+        else if (flow === 'triage') query = analysis?.specialty ? `clínicas para ${analysis.specialty}` : 'centros de salud';
+        else query = symptomsOrMed || 'clínicas'; 
+
+        const result = await searchNearbyPlaces(query, realLocationName, { lat: latitude, lng: longitude }, flow);
+
+        if (sessionRef.current !== currentSession) return;
+
+        // STEP 4: Success (Single Update)
+        setLocationState({
+            status: 'success',
+            coordinates: { lat: latitude, lng: longitude },
+            district: realLocationName
+        });
+        
+        setDynamicCenters(result.places);
+        setIsLoadingResults(false);
+        addMessage(`📍 Ubicación detectada: ${realLocationName}`, 'user');
+
+    } catch (error: any) {
+        if (sessionRef.current !== currentSession) return;
+        console.error("GPS Error", error);
+        
+        setLocationState(prev => ({
+            ...prev,
+            status: 'error',
+            error: error.code === 1 
+                ? 'Permiso de ubicación denegado.'
+                : 'No pudimos obtener tu ubicación.'
+        }));
+        
+        addMessage("⚠️ No pude obtener tu ubicación GPS. Por favor selecciónala manualmente.", 'ai');
+    }
   };
 
   const handleSelectDepartment = (deptId: string) => {
@@ -460,8 +515,12 @@ export default function App() {
       const prov = PROVINCES.find(p => p.id === selectedProvinceId);
       const fullLocation = `${dist?.name}, ${prov?.name}, ${dept?.name}`;
       
-      setDistrict(fullLocation);
-      setUserCoords(undefined); 
+      // Manual selection flow updates locationState to success directly
+      setLocationState({
+          status: 'success',
+          district: fullLocation,
+          coordinates: null
+      });
 
       addMessage(dist?.name || '', 'user');
       setIsTyping(true);
@@ -503,11 +562,13 @@ export default function App() {
       setSymptomsOrMed('');
       setSelectedDepartmentId('');
       setSelectedProvinceId('');
-      setDistrict('');
-      setUserCoords(undefined);
+      
+      // Reset Location State
+      setLocationState({ status: 'idle', coordinates: null, district: '' });
+      
       setInsurance('Sin Seguro');
       setAnalysis(null);
-      setIsRequestingLocation(false);
+      setPharmacyAnalysis(null);
       setSelectedCenter(null);
       setMobileTab('chat');
       setIsTyping(false);
@@ -520,10 +581,13 @@ export default function App() {
       setDynamicCenters([]);
   };
 
-  const hasAnalysis = !!analysis;
+  const hasAnalysis = !!analysis || !!pharmacyAnalysis;
   const hasResults = step === 3;
   const hasDoctor = !!currentDoctor;
   const hasData = uploadedFiles.length > 0 || rightPanelMode === 'data';
+
+  // Determine if Analysis Panel should be visible
+  const showAnalysisPanel = rightPanelMode !== 'data' && flow !== 'directory';
 
   return (
     <div className="h-full w-full overflow-hidden flex flex-col md:items-center md:justify-center md:p-8 relative">
@@ -569,7 +633,10 @@ export default function App() {
                  onRequestLocation={handleRequestLocation}
                  onShowData={handleShowData}
                  isTyping={isTyping}
-                 isRequestingLocation={isRequestingLocation}
+                 
+                 // Pass full location state
+                 locationState={locationState}
+                 
                  currentStep={step}
                  selectedDepartmentId={selectedDepartmentId}
                  selectedProvinceId={selectedProvinceId}
@@ -581,28 +648,35 @@ export default function App() {
                  <HeroSection />
              ) : (
                  <>
-                     {flow === 'triage' && analysis && rightPanelMode !== 'data' && (
+                     {/* Analysis Panel handles both Triage and Pharmacy */}
+                     {showAnalysisPanel && (
                         <AnalysisPanel 
                             analysis={analysis} 
+                            pharmacyData={pharmacyAnalysis}
+                            flow={flow}
                             onContactDoctor={handleContactDoctor} 
                             userInsurance={insurance} 
                         />
                      )}
                      
-                     <div className={`${(flow === 'pharmacy' || flow === 'directory' || rightPanelMode === 'data') ? 'col-span-8' : 'col-span-4'} h-full relative flex flex-col min-h-0`}>
+                     <div className={`${!showAnalysisPanel ? 'col-span-8' : 'col-span-4'} h-full relative flex flex-col min-h-0`}>
                          {rightPanelMode === 'results' && (
                              <ResultsPanel 
                                 onSelectCenter={setSelectedCenter} 
-                                userDistrict={district}
+                                userDistrict={locationState.district}
                                 userInsurance={insurance}
                                 flow={flow}
                                 query={symptomsOrMed}
                                 onRequestLocation={handleRequestLocation}
-                                isRequestingLocation={isRequestingLocation}
-                                onSetLocation={setDistrict}
+                                
+                                // Pass full location state
+                                locationState={locationState}
+                                
+                                onSetLocation={(dist) => setLocationState(prev => ({ ...prev, district: dist, status: 'success' }))}
                                 onSetInsurance={setInsurance}
                                 dynamicResults={dynamicCenters}
                                 isLoading={isLoadingResults}
+                                triageUrgency={analysis?.urgency} // Pass urgency to trigger Emergency Mode
                             />
                          )}
                          {rightPanelMode === 'doctor' && currentDoctor && (
@@ -642,7 +716,10 @@ export default function App() {
                             onRequestLocation={handleRequestLocation}
                             onShowData={handleShowData}
                             isTyping={isTyping}
-                            isRequestingLocation={isRequestingLocation}
+                            
+                            // Pass full location state
+                            locationState={locationState}
+                            
                             currentStep={step}
                             selectedDepartmentId={selectedDepartmentId}
                             selectedProvinceId={selectedProvinceId}
@@ -650,16 +727,16 @@ export default function App() {
                             isConsultationActive={!!currentDoctor}
                         />
                   </div>
-                  {/* ... other mobile panels ... */}
+                  
                   {hasAnalysis && (
                       <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'analysis' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
-                          {analysis && (
-                            <AnalysisPanel 
+                          <AnalysisPanel 
                                 analysis={analysis} 
+                                pharmacyData={pharmacyAnalysis}
+                                flow={flow}
                                 onContactDoctor={handleContactDoctor} 
                                 userInsurance={insurance} 
                             />
-                          )}
                       </div>
                   )}
 
@@ -667,16 +744,20 @@ export default function App() {
                        <div className={`absolute inset-0 transition-opacity duration-300 px-4 pt-4 ${mobileTab === 'results' ? 'opacity-100 z-20' : 'opacity-0 -z-10 pointer-events-none'}`}>
                            <ResultsPanel 
                                 onSelectCenter={setSelectedCenter} 
-                                userDistrict={district}
+                                userDistrict={locationState.district}
                                 userInsurance={insurance}
                                 flow={flow}
                                 query={symptomsOrMed}
                                 onRequestLocation={handleRequestLocation}
-                                isRequestingLocation={isRequestingLocation}
-                                onSetLocation={setDistrict}
+                                
+                                // Pass full location state
+                                locationState={locationState}
+                                
+                                onSetLocation={(dist) => setLocationState(prev => ({ ...prev, district: dist, status: 'success' }))}
                                 onSetInsurance={setInsurance}
                                 dynamicResults={dynamicCenters}
                                 isLoading={isLoadingResults}
+                                triageUrgency={analysis?.urgency}
                             />
                        </div>
                   )}
@@ -706,7 +787,7 @@ export default function App() {
               <MobileNavBar 
                 activeTab={mobileTab} 
                 setActiveTab={setMobileTab} 
-                hasAnalysis={!!analysis && flow === 'triage'}
+                hasAnalysis={!!analysis || !!pharmacyAnalysis}
                 hasResults={step === 3}
                 hasDoctor={hasDoctor}
                 hasData={uploadedFiles.length > 0 || mobileTab === 'data'}

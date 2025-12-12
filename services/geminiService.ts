@@ -1,7 +1,6 @@
 
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { TriageAnalysis, UrgencyLevel, Doctor, RagDocument, MedicalCenter } from '../types';
+import { TriageAnalysis, UrgencyLevel, Doctor, RagDocument, MedicalCenter, MedicineInfo } from '../types';
 
 // Initialize Gemini AI
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -136,7 +135,6 @@ export const analyzeSymptoms = async (input: string | { mimeType: string, data: 
 
       } catch (error) {
         console.warn("Gemini analysis failed or blocked. Using fallback.", error);
-        // FAIL-OPEN STRATEGY: Return a generic analysis instead of blocking the user with "Confidence 0"
         return {
           specialty: "Medicina General",
           specialtyDescription: "Evaluación general requerida.",
@@ -144,13 +142,62 @@ export const analyzeSymptoms = async (input: string | { mimeType: string, data: 
           urgencyExplanation: "Síntomas presentes que requieren valoración médica presencial.",
           detectedSymptoms: ["Malestar general"],
           advice: ["Acudir a consulta médica para evaluación presencial"],
-          confidence: 85 // High confidence to ensure App.tsx accepts it
+          confidence: 85
         };
       }
   });
 };
 
-// ================= MAPS GROUNDING (ROBUST) =================
+// ================= MEDICINE ANALYSIS (Vademecum) =================
+
+export const analyzeMedications = async (text: string): Promise<MedicineInfo[]> => {
+    return callWithRetry(async () => {
+        try {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: `Analyze the medication(s) mentioned in: "${text}". 
+                If multiple meds are found, return a list.
+                Provide usage, dosage (general advice only), warnings, and if prescription is needed in Peru. Spanish.`,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.ARRAY,
+                        items: {
+                            type: Type.OBJECT,
+                            properties: {
+                                name: { type: Type.STRING },
+                                activeIngredient: { type: Type.STRING },
+                                dosage: { type: Type.STRING, description: "Common dosage advice." },
+                                purpose: { type: Type.STRING, description: "What is it for?" },
+                                warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                interactions: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                alternatives: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Generic alternatives" },
+                                requiresPrescription: { type: Type.BOOLEAN },
+                                takenWithFood: { type: Type.STRING, enum: ["Antes", "Después", "Indiferente", "Con alimentos"] }
+                            }
+                        }
+                    }
+                }
+            });
+            return JSON.parse(response.text || "[]") as MedicineInfo[];
+        } catch (e) {
+            console.error(e);
+            return [{
+                name: "Medicamento",
+                activeIngredient: "Desconocido",
+                dosage: "Consultar médico",
+                purpose: "Información no disponible temporalmente.",
+                warnings: ["Error al procesar solicitud"],
+                interactions: [],
+                alternatives: [],
+                requiresPrescription: true,
+                takenWithFood: "Indiferente"
+            }];
+        }
+    });
+};
+
+// ================= MAPS GROUNDING (ROBUST FILTERING) =================
 
 export const identifyLocationFromCoords = async (lat: number, lng: number): Promise<string> => {
     return callWithRetry(async () => {
@@ -167,10 +214,8 @@ export const identifyLocationFromCoords = async (lat: number, lng: number): Prom
                     }
                 }
             });
-            // Cleanup response
             let locationName = response.text || "Ubicación Detectada";
             locationName = locationName.replace(/\./g, '').trim();
-            // If response is too long (hallucination or full address), fallback to generic
             if (locationName.length > 40) return "Tu Ubicación (GPS)";
             return locationName;
         } catch (e) {
@@ -191,40 +236,29 @@ export const searchNearbyPlaces = async (
             let toolConfig: any = undefined;
             let systemInstruction = "You are a helpful assistant using Google Maps. You MUST extract real data from the tool.";
 
-            // STRATEGY 1: DIRECTORY (Specific Entity)
+            // --- STRATEGY 1: DIRECTORY (Specific Entity) ---
             if (intent === 'directory') {
-                prompt = `Using Google Maps:
-                1. First, find the specific place named "${query}" in ${location || 'Lima, Peru'}. This is the PRIMARY RESULT.
-                2. Second, find 3 other similar medical centers nearby to that primary result.
-                
-                IMPORTANT: Output a JSON array in your text response. 
-                - The first item MUST be the primary result.
-                - The following items should be the nearby alternatives.`;
-                
-                systemInstruction += " Your primary goal is to extract the EXACT ADDRESS and PHONE from the Google Maps tool result.";
+                prompt = `Find the place named "${query}" in ${location || 'Lima, Peru'}. Return JSON with exact address and phone.`;
             } 
-            // STRATEGY 2: PHARMACY (Category Search)
+            // --- STRATEGY 2: PHARMACY (Strict Filtering) ---
             else if (intent === 'pharmacy') {
-                 // Clean query to avoid "Farmacias que vendan Paracetamol" returning nothing if obscure.
-                 // Prefer "Farmacias" + location
+                 // We explicitly EXCLUDE clinics to solve the "mixed results" problem
+                 prompt = `Find 8 open "Farmacias" or "Boticas" in ${location || 'Lima, Peru'}. 
+                 Strictly exclude "Clinica", "Hospital", "Centro Medico", "Veterinaria". 
+                 Return names, exact addresses, ratings.`;
+                 
                  if (coords) {
-                     prompt = `Find 6 open pharmacies (Farmacias or Boticas) near my current location (Lat: ${coords.lat}, Lng: ${coords.lng}). Return names, exact addresses, and ratings.`;
-                     toolConfig = {
-                        retrievalConfig: { latLng: { latitude: coords.lat, longitude: coords.lng } }
-                     };
-                } else {
-                     prompt = `Find 6 open pharmacies (Farmacias or Boticas) in ${location}, Peru. Return names, exact addresses, and ratings.`;
+                     prompt = `Find 8 open "Farmacias" or "Boticas" near (Lat: ${coords.lat}, Lng: ${coords.lng}). 
+                     Strictly exclude "Clinica", "Hospital", "Centro Medico".`;
+                     toolConfig = { retrievalConfig: { latLng: { latitude: coords.lat, longitude: coords.lng } } };
                 }
             }
-            // STRATEGY 3: TRIAGE (Clinics/Hospitals)
+            // --- STRATEGY 3: TRIAGE (Clinics/Hospitals) ---
             else {
+                prompt = `Find 8 clinics or hospitals matching "${query}" in ${location || 'Lima, Peru'}. Return names, addresses, ratings.`;
                 if (coords) {
-                     prompt = `Find 6 real clinics or hospitals matching "${query}" near my current location (Lat: ${coords.lat}, Lng: ${coords.lng}) in Peru. Return names, exact addresses, and ratings.`;
-                     toolConfig = {
-                        retrievalConfig: { latLng: { latitude: coords.lat, longitude: coords.lng } }
-                     };
-                } else {
-                     prompt = `Find 6 real clinics or hospitals matching "${query}" in ${location}, Peru. Return names, exact addresses, and ratings.`;
+                     prompt = `Find 8 clinics or hospitals matching "${query}" near (Lat: ${coords.lat}, Lng: ${coords.lng}).`;
+                     toolConfig = { retrievalConfig: { latLng: { latitude: coords.lat, longitude: coords.lng } } };
                 }
             }
             
@@ -234,58 +268,33 @@ export const searchNearbyPlaces = async (
                 config: {
                     tools: [{ googleMaps: {} }],
                     toolConfig: toolConfig,
-                    systemInstruction: systemInstruction
+                    systemInstruction
                 }
             });
 
-            // 1. EXTRACT FROM METADATA (Ground Truth URIs)
             const places: MedicalCenter[] = [];
             const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
             
-            // 2. EXTRACT FROM TEXT (Rich Details for Directory)
-            let richData: any[] = [];
-            if (intent === 'directory' && response.text) {
-                try {
-                    const cleanJson = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-                    const start = cleanJson.indexOf('[');
-                    const end = cleanJson.lastIndexOf(']');
-                    if (start !== -1 && end !== -1) {
-                         richData = JSON.parse(cleanJson.substring(start, end + 1));
-                    }
-                } catch (e) { console.log("Failed to parse enriched JSON from text", e); }
-            }
-
-            // MERGE LOGIC
-            if (richData.length > 0) {
-                 richData.forEach((item, idx) => {
-                     const matchingChunk = groundingChunks?.find((c: any) => 
-                        (c.web?.title || c.maps?.title)?.toLowerCase().includes(item.name.toLowerCase())
-                     );
-                     
-                     places.push({
-                        id: `rich-${idx}-${Date.now()}`,
-                        name: item.name,
-                        type: idx === 0 ? 'Clínica' : 'Centro Médico', // Assume first is the target
-                        district: location || 'Lima',
-                        address: item.address || 'Ver en Mapa',
-                        latitude: 0,
-                        longitude: 0,
-                        insurances: [],
-                        specialties: [query],
-                        googleMapsUri: matchingChunk?.web?.uri || matchingChunk?.maps?.uri || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.name + ' ' + item.address)}`,
-                        rating: item.rating || 0,
-                        isOpen: true,
-                        phone: item.phone || 'No disponible',
-                        description: item.description
-                     });
-                 });
-            } else if (groundingChunks) {
+            if (groundingChunks) {
                 groundingChunks.forEach((chunk: any, index: number) => {
                     const source = chunk.web || chunk.maps; 
                     if (source?.uri && source?.title) {
-                         // Determine type based on Intent
-                         let type: MedicalCenter['type'] = 'Clínica';
-                         if (intent === 'pharmacy') type = 'Farmacia';
+                         const nameLower = source.title.toLowerCase();
+                         
+                         // --- CLIENT-SIDE STRICT FILTERING ---
+                         if (intent === 'pharmacy') {
+                             // Must contain pharmacy keywords
+                             const isPharmacy = /farmacia|botica|apothecary|inkafarma|mifarma/i.test(nameLower);
+                             // Must NOT contain hospital keywords
+                             const isClinic = /clinica|hospital|centro m[eé]dico|policl[ií]nico|veterinaria/i.test(nameLower);
+                             
+                             if (!isPharmacy || isClinic) return; // Skip this result
+                         }
+
+                         let type: MedicalCenter['type'] = intent === 'pharmacy' ? 'Farmacia' : 'Clínica';
+                         
+                         // Determine if 24h ER likely (heuristic based on name for Triage)
+                         const has24h = /hospital|clinica|emergencia/i.test(nameLower) && intent === 'triage';
 
                          places.push({
                             id: `maps-${index}-${Date.now()}`,
@@ -300,7 +309,8 @@ export const searchNearbyPlaces = async (
                             googleMapsUri: source.uri,
                             rating: 4.5,
                             isOpen: true,
-                            phone: 'Ver en Mapa'
+                            phone: 'Ver en Mapa',
+                            has24hER: has24h
                         });
                     }
                 });
@@ -310,27 +320,14 @@ export const searchNearbyPlaces = async (
             const uniquePlaces = places.filter((v,i,a)=>a.findIndex(v2=>(v2.name === v.name))===i);
 
             return {
-                text: response.text || "Aquí tienes los resultados encontrados en Google Maps.",
+                text: response.text || "Resultados encontrados.",
                 places: uniquePlaces
             };
         } catch (e) {
-            console.error("Maps Search Error", e);
-            return { text: "No pude conectar con Google Maps en este momento.", places: [] };
+            return { text: "No pude conectar con Google Maps.", places: [] };
         }
     });
 }
-
-export const explainMedication = async (medication: string): Promise<string> => {
-    return callWithRetry(async () => {
-        try {
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: `Explain very briefly (1-2 sentences) what is "${medication}" used for. Do NOT give medical advice. Just description. Spanish.`,
-            });
-            return response.text || "Información no disponible.";
-        } catch (e) { return "Error de información."; }
-    });
-};
 
 export const generateFollowUp = async (history: any[], activeFiles: RagDocument[] = []): Promise<string> => {
     return callWithRetry(async () => {

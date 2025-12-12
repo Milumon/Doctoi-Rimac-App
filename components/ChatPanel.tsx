@@ -3,6 +3,13 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Message, INSURANCES } from '../types';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from '../data/ubigeo';
 
+interface LocationState {
+    status: 'idle' | 'requesting' | 'searching' | 'success' | 'error';
+    coordinates: { lat: number; lng: number } | null;
+    district: string;
+    error?: string;
+}
+
 interface ChatPanelProps {
   messages: Message[];
   onSendMessage: (text: string, audio?: { mimeType: string, data: string }) => void;
@@ -15,7 +22,12 @@ interface ChatPanelProps {
   onRequestLocation: () => void;
   onShowData: () => void;
   isTyping: boolean;
-  isRequestingLocation: boolean;
+  
+  // New Location State prop supersedes isRequestingLocation
+  locationState?: LocationState;
+  // Legacy prop (optional)
+  isRequestingLocation?: boolean;
+
   currentStep: number;
   selectedDepartmentId: string;
   selectedProvinceId: string;
@@ -35,7 +47,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onRequestLocation,
   onShowData,
   isTyping,
-  isRequestingLocation,
+  locationState, // Use this for source of truth
+  isRequestingLocation, // Fallback
   currentStep,
   selectedDepartmentId,
   selectedProvinceId,
@@ -54,9 +67,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const endRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // Helper to determine if location is busy
+  const isLocationBusy = locationState 
+      ? (locationState.status === 'requesting' || locationState.status === 'searching')
+      : isRequestingLocation;
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping, isRequestingLocation]);
+  }, [messages, isTyping, isLocationBusy]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -130,7 +148,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   };
 
-  const isInputDisabled = currentStep === 1.1 || currentStep === 1.2 || currentStep === 2 || isRequestingLocation || isConsultationActive;
+  const isInputDisabled = currentStep === 1.1 || currentStep === 1.2 || currentStep === 2 || isLocationBusy || isConsultationActive;
   
   const displayProvinces = activeProvinces.filter(p => p.department_id === selectedDepartmentId);
   const displayDistricts = activeDistricts.filter(d => d.province_id === selectedProvinceId);
@@ -241,32 +259,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             {msg.type === 'department_selector' && !isConsultationActive && (
               <div className="w-[90%] mt-2 flex flex-col gap-4">
                  {/* Location Request Card */}
-                 <div className={`relative overflow-hidden p-4 rounded-2xl border transition-all duration-300 ${isRequestingLocation ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200 hover:border-blue-200 hover:shadow-md'}`}>
+                 <div className={`relative overflow-hidden p-4 rounded-2xl border transition-all duration-300 ${isLocationBusy ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200 hover:border-blue-200 hover:shadow-md'}`}>
                     <div className="flex items-center gap-4 relative z-10">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${isRequestingLocation ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
-                            {isRequestingLocation ? (
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${isLocationBusy ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
+                            {isLocationBusy ? (
                                 <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                             ) : (
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                             )}
                         </div>
                         <div className="flex-1">
-                            <h4 className={`text-sm font-bold ${isRequestingLocation ? 'text-blue-800' : 'text-slate-700'}`}>
-                                {isRequestingLocation ? 'Detectando ubicación...' : 'Ubicación Automática'}
+                            <h4 className={`text-sm font-bold ${isLocationBusy ? 'text-blue-800' : 'text-slate-700'}`}>
+                                {locationState?.status === 'requesting' ? 'Obteniendo GPS...' : 
+                                 locationState?.status === 'searching' ? 'Analizando mapa...' : 
+                                 'Ubicación Automática'}
                             </h4>
                             <p className="text-xs text-slate-500 leading-tight mt-0.5">
-                                {isRequestingLocation ? 'Espera un momento por favor' : 'Detectar mi distrito automáticamente'}
+                                {isLocationBusy ? 'Estamos detectando tu zona...' : 'Detectar mi distrito automáticamente'}
                             </p>
                         </div>
                         <button 
                             onClick={onRequestLocation}
-                            disabled={isRequestingLocation}
-                            className={`px-4 py-2 text-xs font-bold rounded-xl transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isRequestingLocation ? 'bg-white text-blue-600' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                            disabled={isLocationBusy}
+                            className={`px-4 py-2 text-xs font-bold rounded-xl transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isLocationBusy ? 'bg-white text-blue-600' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
                         >
-                            {isRequestingLocation ? '...' : 'Activar'}
+                            {isLocationBusy ? '...' : 'Activar'}
                         </button>
                     </div>
-                    {isRequestingLocation && (
+                    {isLocationBusy && (
                          <div className="absolute bottom-0 left-0 h-1 bg-blue-400/30 w-full animate-pulse"></div>
                     )}
                  </div>

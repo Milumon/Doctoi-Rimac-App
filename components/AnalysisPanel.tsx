@@ -1,8 +1,11 @@
-import React from 'react';
-import { TriageAnalysis, UrgencyLevel } from '../types';
+
+import React, { useState } from 'react';
+import { TriageAnalysis, MedicineInfo, UrgencyLevel } from '../types';
 
 interface AnalysisPanelProps {
-  analysis: TriageAnalysis;
+  analysis?: TriageAnalysis | null;
+  pharmacyData?: MedicineInfo[] | null;
+  flow: 'triage' | 'pharmacy' | 'directory' | null;
   onContactDoctor?: () => void;
   userInsurance?: string;
 }
@@ -17,87 +20,215 @@ const getUrgencyColors = (level: UrgencyLevel) => {
     }
 }
 
-export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, onContactDoctor, userInsurance }) => {
-  const colors = getUrgencyColors(analysis.urgency);
+export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ analysis, pharmacyData, flow, onContactDoctor }) => {
+  const [activeTab, setActiveTab] = useState(0);
 
+  // === RENDER FOR PHARMACY (VADEMECUM) ===
+  if (flow === 'pharmacy' && pharmacyData && pharmacyData.length > 0) {
+      const currentMed = pharmacyData[activeTab];
+
+      return (
+        <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter min-h-0">
+            {/* Pharmacy Header */}
+            <div className="px-6 py-5 border-b border-blue-50 bg-blue-50/30 flex justify-between items-center shrink-0">
+                <span className="text-sm font-bold text-blue-900 flex items-center gap-2">
+                    💊 Información del Medicamento
+                </span>
+                {pharmacyData.length > 1 && (
+                    <span className="text-[10px] font-bold px-2 py-1 bg-blue-100 text-blue-700 rounded-full">{pharmacyData.length} detectados</span>
+                )}
+            </div>
+
+            {/* Tabs if Multiple Meds */}
+            {pharmacyData.length > 1 && (
+                <div className="flex px-6 pt-4 gap-2 overflow-x-auto no-scrollbar">
+                    {pharmacyData.map((med, idx) => (
+                        <button 
+                            key={idx}
+                            onClick={() => setActiveTab(idx)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${activeTab === idx ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                        >
+                            {med.name}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {/* Content for Medication */}
+            <div className="p-6 overflow-y-auto space-y-6 no-scrollbar flex-1 min-h-0">
+                <div className="text-center mt-2">
+                    <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg shadow-blue-200 mb-3 text-3xl">
+                        💊
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-800">{currentMed.name}</h3>
+                    <p className="text-xs text-slate-500 mt-1">{currentMed.activeIngredient}</p>
+                    
+                    {currentMed.requiresPrescription && (
+                        <div className="mt-3 inline-flex items-center gap-2 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
+                            <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                            <span className="text-xs font-bold text-amber-800">Requiere Receta Médica</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Purpose */}
+                <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl">
+                    <h4 className="text-xs font-bold text-blue-800 mb-2 flex items-center gap-2">🎯 Para qué sirve</h4>
+                    <p className="text-sm text-blue-900 leading-relaxed">{currentMed.purpose}</p>
+                </div>
+
+                {/* Grid Info */}
+                <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Dosis Recomendada</span>
+                        <p className="text-xs font-semibold text-slate-700">{currentMed.dosage}</p>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Toma / Comida</span>
+                        <p className={`text-xs font-semibold ${currentMed.takenWithFood === 'Con alimentos' ? 'text-emerald-600' : 'text-slate-700'}`}>
+                            {currentMed.takenWithFood}
+                        </p>
+                    </div>
+                </div>
+
+                {/* Warnings */}
+                {currentMed.warnings && currentMed.warnings.length > 0 && (
+                    <div className="bg-red-50/50 border border-red-100 p-4 rounded-2xl">
+                        <h4 className="text-xs font-bold text-red-800 mb-2 flex items-center gap-1">
+                            ⚠️ Advertencias
+                        </h4>
+                        <ul className="text-[11px] text-red-900 space-y-1 list-disc list-inside opacity-90">
+                            {currentMed.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                        </ul>
+                    </div>
+                )}
+                
+                {/* Interactions */}
+                {currentMed.interactions && currentMed.interactions.length > 0 && (
+                    <div className="bg-amber-50/50 border border-amber-100 p-4 rounded-2xl">
+                        <h4 className="text-xs font-bold text-amber-800 mb-2">🔄 Interacciones conocidas</h4>
+                        <div className="flex flex-wrap gap-2">
+                            {currentMed.interactions.map((int, idx) => (
+                                <span key={idx} className="text-[10px] bg-white border border-amber-200 text-amber-900 px-2 py-1 rounded-lg">
+                                {int}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Alternatives */}
+                {currentMed.alternatives && currentMed.alternatives.length > 0 && (
+                    <div>
+                        <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">Alternativas Genéricas</h4>
+                        <div className="flex flex-wrap gap-2">
+                            {currentMed.alternatives.map((alt, idx) => (
+                            <span key={idx} className="text-xs bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg font-medium">
+                                {alt}
+                            </span>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+            
+             <div className="p-3 bg-slate-50 border-t border-slate-100 text-[9px] text-center text-slate-400">
+                Información referencial. Consulte siempre a su médico.
+            </div>
+        </section>
+      );
+  }
+
+  // === RENDER FOR TRIAGE (SYMPTOMS) ===
+  if (flow === 'triage' && analysis) {
+    const colors = getUrgencyColors(analysis.urgency);
+
+    return (
+        <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter min-h-0">
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-slate-50 bg-blue-50/30 flex justify-between items-center shrink-0">
+            <span className="text-sm font-bold text-blue-900 flex items-center gap-2">
+            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+            Análisis Clínico
+            </span>
+            <span className="text-[10px] font-bold px-2 py-1 bg-blue-100 text-blue-700 rounded-full">{analysis.confidence}% Confianza</span>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 overflow-y-auto space-y-6 no-scrollbar flex-1 min-h-0">
+            <div className="text-center mt-2">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg shadow-blue-200 mb-3 text-3xl">
+                🩺
+            </div>
+            <h3 className="text-xl font-bold text-slate-800">{analysis.specialty}</h3>
+            <p className="text-xs text-slate-500 mt-1">{analysis.specialtyDescription}</p>
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+            <div className="flex justify-between text-xs mb-2 font-semibold">
+                <span className="text-slate-500">Nivel de Urgencia</span>
+                <span className={colors.text}>{analysis.urgency}</span>
+            </div>
+            <div className="w-full bg-slate-200 rounded-full h-2">
+                <div 
+                    className={`bg-gradient-to-r ${colors.gradient} h-2 rounded-full shadow-sm transition-all duration-1000 ease-out`} 
+                    style={{ width: colors.width }}
+                ></div>
+            </div>
+            <p className="text-[10px] text-slate-400 mt-2 leading-tight">{analysis.urgencyExplanation}</p>
+            </div>
+
+            <div>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Síntomas Detectados</span>
+            <div className="flex flex-wrap gap-2">
+                {analysis.detectedSymptoms.map((sym, idx) => (
+                    <span key={idx} className="px-3 py-1 bg-slate-100 text-slate-600 rounded-lg text-xs font-medium border border-slate-200">{sym}</span>
+                ))}
+            </div>
+            </div>
+
+            <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-2xl">
+            <h4 className="text-xs font-bold text-emerald-800 mb-2 flex items-center gap-1">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                Recomendaciones
+            </h4>
+            <ul className="text-[11px] text-emerald-700 space-y-1 list-disc list-inside">
+                {analysis.advice.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                ))}
+            </ul>
+            </div>
+        </div>
+
+        {onContactDoctor && (
+            <div className="p-4 bg-white border-t border-slate-50 shrink-0 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
+                <button 
+                    onClick={onContactDoctor}
+                    className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-200 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
+                >
+                    <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    </div>
+                    <div className="flex flex-col items-start">
+                        <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Disponible ahora</span>
+                        <span className="text-base font-bold">Consultar Especialista</span>
+                    </div>
+                </button>
+            </div>
+        )}
+        </section>
+    );
+  }
+
+  // DEFAULT / DIRECTORY / LOADING
   return (
-    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex flex-col overflow-hidden relative z-10 animate-fade-enter min-h-0">
-      {/* Header */}
-      <div className="px-6 py-5 border-b border-slate-50 bg-blue-50/30 flex justify-between items-center shrink-0">
-        <span className="text-sm font-bold text-blue-900 flex items-center gap-2">
-          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
-          Análisis Clínico
-        </span>
-        <span className="text-[10px] font-bold px-2 py-1 bg-blue-100 text-blue-700 rounded-full">{analysis.confidence}% Confianza</span>
-      </div>
-
-      {/* Scrollable Content */}
-      <div className="p-6 overflow-y-auto space-y-6 no-scrollbar flex-1 min-h-0">
-        {/* Specialty */}
-        <div className="text-center mt-2">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg shadow-blue-200 mb-3 text-3xl">
-             🩺
-          </div>
-          <h3 className="text-xl font-bold text-slate-800">{analysis.specialty}</h3>
-          <p className="text-xs text-slate-500 mt-1">{analysis.specialtyDescription}</p>
+    <section className="col-span-12 lg:col-span-4 h-full bg-white/80 backdrop-blur-xl lg:rounded-[2.5rem] shadow-lg border-b lg:border border-white flex items-center justify-center text-center p-6 min-h-0">
+        <div className="opacity-50">
+            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            </div>
+            <p className="text-sm text-slate-400 font-medium">El análisis aparecerá aquí</p>
         </div>
-
-        {/* Urgency Bar */}
-        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-          <div className="flex justify-between text-xs mb-2 font-semibold">
-            <span className="text-slate-500">Nivel de Urgencia</span>
-            <span className={colors.text}>{analysis.urgency}</span>
-          </div>
-          <div className="w-full bg-slate-200 rounded-full h-2">
-            <div 
-                className={`bg-gradient-to-r ${colors.gradient} h-2 rounded-full shadow-sm transition-all duration-1000 ease-out`} 
-                style={{ width: colors.width }}
-            ></div>
-          </div>
-          <p className="text-[10px] text-slate-400 mt-2 leading-tight">{analysis.urgencyExplanation}</p>
-        </div>
-
-        {/* Detected Symptoms */}
-        <div>
-          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Síntomas Detectados</span>
-          <div className="flex flex-wrap gap-2">
-            {analysis.detectedSymptoms.map((sym, idx) => (
-                 <span key={idx} className="px-3 py-1 bg-slate-100 text-slate-600 rounded-lg text-xs font-medium border border-slate-200">{sym}</span>
-            ))}
-          </div>
-        </div>
-
-        {/* Advice */}
-        <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-2xl">
-          <h4 className="text-xs font-bold text-emerald-800 mb-2 flex items-center gap-1">
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            Recomendaciones
-          </h4>
-          <ul className="text-[11px] text-emerald-700 space-y-1 list-disc list-inside">
-            {analysis.advice.map((item, idx) => (
-                <li key={idx}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      </div>
-
-      {/* Sticky Footer Action */}
-      {onContactDoctor && (
-        <div className="p-4 bg-white border-t border-slate-50 shrink-0 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
-            <button 
-                onClick={onContactDoctor}
-                className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-200 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
-            >
-                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                </div>
-                <div className="flex flex-col items-start">
-                    <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">Disponible ahora</span>
-                    <span className="text-base font-bold">Consultar Especialista</span>
-                </div>
-            </button>
-        </div>
-      )}
     </section>
   );
 };

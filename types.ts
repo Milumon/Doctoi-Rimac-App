@@ -23,6 +23,18 @@ export interface TriageAnalysis {
   confidence: number; // 0-100
 }
 
+export interface MedicineInfo {
+  name: string;
+  activeIngredient: string;
+  dosage: string; // General dosage advice
+  purpose: string; // What is it for
+  warnings: string[];
+  interactions: string[]; // Food or drug interactions
+  alternatives: string[]; // Generic names
+  requiresPrescription: boolean;
+  takenWithFood: 'Antes' | 'Después' | 'Indiferente' | 'Con alimentos';
+}
+
 export interface MedicalCenter {
   id: string;
   name: string;
@@ -42,6 +54,7 @@ export interface MedicalCenter {
   requirements?: string[];
   website?: string;
   googleMapsUri?: string;
+  has24hER?: boolean; // New field for Emergency logic
 }
 
 export interface DoctorMencion {
