@@ -333,7 +333,7 @@ export default function App() {
         if (newFlow === 'pharmacy') return s.category === 'Farmacia';
         if (newFlow === 'directory') return s.category === 'Directorio' || s.category === 'Seguros';
         
-        // For general chat, maybe include everything or a subset? 
+        // For general chat, use relevantSources (which currently includes all active ones)
         // Let's default to all enabled sources for broad context.
         return true; 
     });
@@ -670,21 +670,19 @@ export default function App() {
     <div className="h-full w-full overflow-hidden flex flex-col md:items-center md:justify-center md:p-8 relative">
        <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none bg-slate-50">
           <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] md:w-[500px] md:h-[500px] bg-blue-200/40 md:bg-blue-100/50 rounded-full blur-[80px] md:blur-3xl animate-blob"></div>
+          
+          {/* UPDATED BACKGROUND ICON - ABSTRACT PIN */}
           <div className="absolute bottom-[-50px] right-[-50px] md:bottom-[-80px] md:right-[-80px] opacity-10 md:opacity-20 transform rotate-[-15deg] scale-150">
              <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <defs>
-                    <linearGradient id="bg-grad-main" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
-                        <stop stopColor="#F8FAFC"/> 
-                        <stop offset="1" stopColor="#F0FDFA"/> 
-                    </linearGradient>
-                    <linearGradient id="bg-grad-stetho" x1="100" y1="100" x2="400" y2="400" gradientUnits="userSpaceOnUse">
-                        <stop stopColor="#2DD4BF"/> 
-                        <stop offset="1" stopColor="#0EA5E9"/> 
+                    <linearGradient id="bg-grad-brand" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+                        <stop stopColor="#3B82F6"/> 
+                        <stop offset="1" stopColor="#10B981"/> 
                     </linearGradient>
                 </defs>
-                <rect width="512" height="512" rx="120" fill="url(#bg-grad-main)" fillOpacity="0.5"/>
-                <path d="M256 80 V 120 C 256 150 320 120 320 180 V 260 C 320 310 280 340 256 340" stroke="url(#bg-grad-stetho)" strokeWidth="18" strokeLinecap="round" opacity="0.6"/>
-                <circle cx="256" cy="340" r="32" fill="url(#bg-grad-stetho)" opacity="0.6"/>
+                <rect width="512" height="512" rx="120" fill="url(#bg-grad-brand)" fillOpacity="0.05"/>
+                <path d="M256 120 C 190 120 146 170 146 230 C 146 300 256 420 256 420 C 256 420 366 300 366 230 C 366 170 322 120 256 120 Z" fill="url(#bg-grad-brand)" opacity="0.6"/>
+                <path d="M256 190 V 270 M 216 230 H 296" stroke="white" strokeWidth="24" strokeLinecap="round"/>
             </svg>
           </div>
        </div>
