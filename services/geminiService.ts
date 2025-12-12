@@ -455,7 +455,7 @@ export const identifyLocationFromCoords = async (lat: number, lng: number): Prom
 
 export const searchNearbyPlaces = async (
     query: string, 
-    location: string, 
+    location: string | null, 
     coords?: {lat: number, lng: number},
     intent: 'triage' | 'pharmacy' | 'directory' | null = 'triage'
 ): Promise<{ text: string, places: MedicalCenter[] }> => {

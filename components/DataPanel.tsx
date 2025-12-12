@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useMemo } from 'react';
 import { RagDocument, KnowledgeSource } from '../types';
 
@@ -53,7 +52,7 @@ export const DataPanel: React.FC<DataPanelProps> = ({
   };
 
   // Group sources logically for display
-  const groupedSources = useMemo(() => {
+  const groupedSources = useMemo<Record<string, KnowledgeSource[]>>(() => {
       return {
           'Dolencia & Protocolos': sources.filter(s => s.category === 'Protocolos'),
           'Farmacia & Precios': sources.filter(s => s.category === 'Farmacia'),
@@ -111,7 +110,7 @@ export const DataPanel: React.FC<DataPanelProps> = ({
                       </div>
                   </div>
 
-                  {Object.entries(groupedSources).map(([categoryName, categorySources]) => (
+                  {(Object.entries(groupedSources) as [string, KnowledgeSource[]][]).map(([categoryName, categorySources]) => (
                       categorySources.length > 0 && (
                           <div key={categoryName} className="space-y-3">
                               <h4 className="text-[10px] font-bold text-violet-400 uppercase tracking-widest border-b border-slate-100 pb-1">

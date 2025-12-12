@@ -223,6 +223,10 @@ export default function App() {
       setSymptomsOrMed('');      
       setStep(0);                
       setMobileTab('chat');
+      
+      // AUTO-CLOSE DATA PANEL: Restore UI for new flow
+      setRightPanelMode('results');
+
       setUnreadAnalysis(false);
       setUnreadResults(false);
       setShowToast(false);
@@ -282,6 +286,13 @@ export default function App() {
   const handleSendMessage = async (text: string, audio?: { mimeType: string, data: string }) => {
     const currentSession = sessionRef.current;
     
+    // AUTO-CLOSE DATA PANEL: If user sends a message, focus on chat/results
+    if (rightPanelMode === 'data') setRightPanelMode('results');
+    if (mobileTab === 'data') setMobileTab('chat');
+
+    // Get active sources for context
+    const activeSources = knowledgeSources.filter(s => s.isActive);
+
     // 1. UI FEEDBACK
     if (audio) {
         setIsTyping(true);
@@ -494,11 +505,8 @@ export default function App() {
 
         setStep(3);
         
-        // NO REDIRECT
-        
-        const realLocationName = await identifyLocationFromCoords(latitude, longitude);
-        
-        if (sessionRef.current !== currentSession) return;
+        // 🚀 OPTIMIZATION: Fire-and-forget for cosmetic location name (parallel execution)
+        const locationNamePromise = identifyLocationFromCoords(latitude, longitude);
 
         setIsLoadingResults(true); 
         
@@ -507,19 +515,28 @@ export default function App() {
         else if (flow === 'triage') query = analysis?.specialty ? `clínicas para ${analysis.specialty}` : 'centros de salud';
         else query = symptomsOrMed || 'clínicas'; 
 
-        const result = await searchNearbyPlaces(query, realLocationName, { lat: latitude, lng: longitude }, flow);
+        // 🚀 OPTIMIZATION: Search immediately using coordinates (null location string)
+        const result = await searchNearbyPlaces(query, null, { lat: latitude, lng: longitude }, flow);
 
         if (sessionRef.current !== currentSession) return;
 
+        setDynamicCenters(result.places);
+        setIsLoadingResults(false);
+        
+        // Update state with success. Initially use "Tu Ubicación (GPS)" or similar until name resolves
         setLocationState({
             status: 'success',
             coordinates: { lat: latitude, lng: longitude },
-            district: realLocationName
+            district: "Ubicación detectada (GPS)"
         });
-        
-        setDynamicCenters(result.places);
-        setIsLoadingResults(false);
-        addMessage(`📍 Ubicación detectada: ${realLocationName}`, 'user');
+
+        // Resolve cosmetic name in background
+        locationNamePromise.then(realLocationName => {
+            if (sessionRef.current === currentSession) {
+                 setLocationState(prev => ({ ...prev, district: realLocationName }));
+                 addMessage(`📍 Ubicación detectada: ${realLocationName}`, 'user');
+            }
+        });
         
     } catch (error: any) {
         if (sessionRef.current !== currentSession) return;
