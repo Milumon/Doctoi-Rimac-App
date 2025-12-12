@@ -10,9 +10,10 @@ import { DetailModal } from './components/DetailModal';
 import { MobileNavBar } from './components/MobileNavBar';
 import { MobileWelcome } from './components/MobileWelcome'; 
 import { MobileToast, ToastType } from './components/MobileToast';
-import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, Doctor, RagDocument, UrgencyLevel } from './types';
+import { Message, TriageAnalysis, MedicineInfo, MedicalCenter, Doctor, RagDocument, UrgencyLevel, KnowledgeSource } from './types';
 import { doctors } from './data/doctors';
 import { DEPARTMENTS, PROVINCES, DISTRICTS } from './data/ubigeo';
+import { OFFICIAL_SOURCES } from './data/knowledgeBase';
 import { analyzeSymptoms, analyzeMedications, generateFollowUp, classifyMultimodalIntent, generateDoctorResponse, uploadFileToGemini, deleteFileFromGemini, getActiveFilesFromGemini, searchNearbyPlaces, identifyLocationFromCoords } from './services/geminiService';
 
 // Steps: 
@@ -56,6 +57,7 @@ export default function App() {
   
   // RAG / DATA STATE
   const [uploadedFiles, setUploadedFiles] = useState<RagDocument[]>([]);
+  const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>(OFFICIAL_SOURCES);
   const [isUploading, setIsUploading] = useState(false);
 
   // MAPS GROUNDING STATE
@@ -123,6 +125,17 @@ export default function App() {
       if (toastType === 'triage' || toastType === 'medication') setMobileTab('analysis');
       if (toastType === 'places') setMobileTab('results');
   }
+
+  const handleToggleSource = (sourceId: string) => {
+      setKnowledgeSources(prev => prev.map(s => 
+        s.id === sourceId ? { ...s, isActive: !s.isActive } : s
+      ));
+  };
+
+  const handleCloseDataPanel = () => {
+      setRightPanelMode('results');
+      if (mobileTab === 'data') setMobileTab('chat');
+  };
 
   // ===================== CORE LOGIC: TRIGGER MAPS SEARCH =====================
   useEffect(() => {
@@ -279,8 +292,7 @@ export default function App() {
 
     const input = audio ? audio : text;
 
-    // 2. ALWAYS CLASSIFY INTENT (Even in Step 3)
-    // This allows us to break out of context loops (e.g. Suicide -> Pharmacy)
+    // 2. ALWAYS CLASSIFY INTENT
     const result = await classifyMultimodalIntent(input);
 
     if (sessionRef.current !== currentSession) return;
@@ -288,20 +300,29 @@ export default function App() {
     if (audio) addMessage(`🎤 "${result.transcription}"`, 'user');
 
     // 3. DETERMINE IF WE SWITCH FLOW OR CONTINUE CHAT
-    // A flow switch happens if:
-    // A. The identified intent is NOT chat (meaning it's a specific health/med command).
-    // B. We are in step 0/1 (initial setup).
-    // C. An EMERGENCY is detected.
     const isFlowChange = (result.intent !== 'chat') || step < 3 || result.isEmergency;
     
-    // Special check: If user was in Emergency Triage, and asks for generic medicine, FORCE switch
     const forceSwitch = analysis?.urgency === UrgencyLevel.EMERGENCY && result.intent === 'pharmacy';
+
+    // === NEW: CONTEXTUAL SOURCE FILTERING LOGIC ===
+    // Determine which knowledge sources to use based on the *detected* intent (newFlow)
+    const newFlow = result.intent as Flow;
+    const relevantSources = knowledgeSources.filter(s => {
+        if (!s.isActive) return false;
+        
+        // Map intents to categories
+        if (newFlow === 'triage') return s.category === 'Protocolos';
+        if (newFlow === 'pharmacy') return s.category === 'Farmacia';
+        if (newFlow === 'directory') return s.category === 'Directorio' || s.category === 'Seguros';
+        
+        // For general chat, maybe include everything or a subset? 
+        // Let's default to all enabled sources for broad context.
+        return true; 
+    });
 
     if (isFlowChange || forceSwitch) {
         // === FLOW SWITCHING / RE-EXECUTION LOGIC ===
-        const newFlow = result.intent as Flow;
         
-        // Accumulate symptoms if we are continuing in Triage mode (e.g. "I have fever" -> "And bleeding")
         let effectiveQuery = result.query || result.transcription;
         if (newFlow === 'triage' && flow === 'triage' && !result.isEmergency && analysis) {
              effectiveQuery = `${symptomsOrMed}. ${effectiveQuery}`;
@@ -310,11 +331,9 @@ export default function App() {
         setFlow(newFlow);
         setSymptomsOrMed(effectiveQuery);
         
-        // RESET STATE FOR NEW FLOW IF IT CHANGED
         if (newFlow !== flow) {
             setDynamicCenters([]);
             setMobileTab('chat');
-            // Only clear the analysis relevant to the *other* flow
             if (newFlow !== 'triage') setAnalysis(null);
             if (newFlow !== 'pharmacy') setPharmacyAnalysis(null);
         }
@@ -329,7 +348,7 @@ export default function App() {
         // EXECUTE FLOW LOGIC
         if (newFlow === 'triage') {
              try {
-                 const triageResult = await analyzeSymptoms(effectiveQuery);
+                 const triageResult = await analyzeSymptoms(effectiveQuery, relevantSources);
                  if (sessionRef.current !== currentSession) return;
                  setAnalysis(triageResult);
                  setIsTyping(false);
@@ -338,13 +357,10 @@ export default function App() {
                  
                  const isEmergency = triageResult.urgency === UrgencyLevel.EMERGENCY;
 
-                 // 🚨 EMERGENCY BYPASS
                  if (hasValidLocation || isEmergency) {
                      if (isEmergency) {
                         addMessage("🚨 EMERGENCIA DETECTADA. Mostrando protocolos de seguridad.", 'ai');
-                        // Force view on mobile
                         setMobileTab('analysis'); 
-                        // Force right panel on desktop
                         setRightPanelMode('results'); 
                      } else {
                         addMessage("He actualizado el análisis de síntomas. Buscando centros...", 'ai');
@@ -360,7 +376,7 @@ export default function App() {
         } 
         else if (newFlow === 'pharmacy') {
              try {
-                const meds = await analyzeMedications(effectiveQuery);
+                const meds = await analyzeMedications(effectiveQuery, relevantSources);
                 if (sessionRef.current !== currentSession) return;
                 setPharmacyAnalysis(meds);
                 setIsTyping(false);
@@ -386,12 +402,15 @@ export default function App() {
              return;
         }
         else {
-            // Fallback to chat if intent classification failed slightly but we are in step 0
              setIsTyping(false);
              if (step === 0) {
                  addMessage("Hola. Puedo ayudarte con triaje, farmacias o directorio. ¿Qué necesitas?", 'ai');
              } else {
-                 const response = await generateFollowUp([{role: 'user', parts: [{text: result.transcription}]}], uploadedFiles);
+                 const response = await generateFollowUp(
+                     [{role: 'user', parts: [{text: result.transcription}]}], 
+                     uploadedFiles,
+                     relevantSources
+                 );
                  addMessage(response.text, 'ai');
              }
              return;
@@ -409,7 +428,8 @@ export default function App() {
         ].filter(m => m.parts[0].text && !m.parts[0].text.includes('selecciona') && !m.parts[0].text.includes('Usar mi ubicación'));
 
         try {
-             const response = await generateFollowUp(history, uploadedFiles);
+             // For generic chat, use relevantSources (which currently includes all active ones)
+             const response = await generateFollowUp(history, uploadedFiles, relevantSources);
              if (sessionRef.current !== currentSession) return;
              
              setIsTyping(false);
@@ -417,7 +437,7 @@ export default function App() {
 
              if (response.action === 'SEARCH_MAPS') {
                  if (response.query) setSymptomsOrMed(response.query);
-                 setStep(3); // Trigger map search effect
+                 setStep(3); 
                  
                  if (!locationState.district && !locationState.coordinates) {
                      addMessage("Para mostrarte el mapa, necesito tu ubicación.", 'ai', 'department_selector');
@@ -615,6 +635,9 @@ export default function App() {
       setDynamicCenters([]);
       setToastType(null);
       setShowToast(false);
+      
+      // Reset sources to default (optional, keeping state persists selection)
+      // setKnowledgeSources(OFFICIAL_SOURCES);
   };
 
   const hasAnalysis = !!analysis || !!pharmacyAnalysis;
@@ -735,6 +758,10 @@ export default function App() {
                                 onUpload={handleUploadFile}
                                 onDelete={handleDeleteFile}
                                 isUploading={isUploading}
+                                
+                                sources={knowledgeSources}
+                                onToggleSource={handleToggleSource}
+                                onClose={handleCloseDataPanel} // Close handler
                              />
                          )}
                      </div>
@@ -820,6 +847,10 @@ export default function App() {
                             onUpload={handleUploadFile}
                             onDelete={handleDeleteFile}
                             isUploading={isUploading}
+                            
+                            sources={knowledgeSources}
+                            onToggleSource={handleToggleSource}
+                            onClose={handleCloseDataPanel} // Close handler
                         />
                   </div>
               </div>

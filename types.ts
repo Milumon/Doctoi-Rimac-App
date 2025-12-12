@@ -92,6 +92,17 @@ export interface RagDocument {
   sizeBytes: string;
 }
 
+// NEW: Interface for fixed URLs
+export interface KnowledgeSource {
+  id: string;
+  name: string;
+  category: 'Protocolos' | 'Farmacia' | 'Seguros' | 'Directorio';
+  url: string;
+  description: string;
+  isActive: boolean;
+  icon?: string;
+}
+
 export const INSURANCES = [
   "SIS",
   "EsSalud",

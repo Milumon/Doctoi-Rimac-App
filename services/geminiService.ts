@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { TriageAnalysis, UrgencyLevel, Doctor, RagDocument, MedicalCenter, MedicineInfo } from '../types';
+import { TriageAnalysis, UrgencyLevel, Doctor, RagDocument, MedicalCenter, MedicineInfo, KnowledgeSource } from '../types';
 
 // Initialize Gemini AI
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -108,6 +108,14 @@ export const getActiveFilesFromGemini = async (): Promise<RagDocument[]> => {
     }
 };
 
+// Helper to format sources for prompt
+const formatSourcesContext = (sources: KnowledgeSource[]) => {
+    if (sources.length === 0) return "";
+    return `\nOFFICIAL KNOWLEDGE BASE (PRIORITIZE INFORMATION FROM HERE):
+    ${sources.map(s => `- ${s.name}: ${s.url} (${s.description})`).join('\n')}
+    \nUse Google Search Grounding to verify details against these domains if needed.\n`;
+};
+
 // =================================================================
 // 🩺 TRIAGE ANALYSIS (ENHANCED WITH EMERGENCY DETECTION)
 // =================================================================
@@ -138,7 +146,10 @@ const triageSchema: Schema = {
   required: ["specialty", "specialtyDescription", "urgency", "urgencyExplanation", "detectedSymptoms", "advice", "confidence"]
 };
 
-export const analyzeSymptoms = async (input: string | { mimeType: string, data: string }): Promise<TriageAnalysis> => {
+export const analyzeSymptoms = async (
+    input: string | { mimeType: string, data: string },
+    activeSources: KnowledgeSource[] = []
+): Promise<TriageAnalysis> => {
   return callWithRetry(async () => {
       try {
         // 🚨 LEVEL 1: Hard-coded detection BEFORE AI
@@ -181,8 +192,10 @@ export const analyzeSymptoms = async (input: string | { mimeType: string, data: 
             };
         }
 
-        // 🤖 LEVEL 2: AI Analysis (if no hard emergency detected)
+        // 🤖 LEVEL 2: AI Analysis
         let contents: any;
+        const sourcesContext = formatSourcesContext(activeSources);
+
         if (typeof input === 'string') {
             contents = `Analyze the following symptoms for INFORMATIONAL PURPOSES ONLY. Not a medical diagnosis. 
             Symptoms: "${input}"`;
@@ -201,7 +214,9 @@ export const analyzeSymptoms = async (input: string | { mimeType: string, data: 
           config: {
             responseMimeType: "application/json",
             responseSchema: triageSchema,
-            systemInstruction: `You are a triage assistant. 
+            // Enable Search Grounding to verify against knowledge base
+            tools: activeSources.length > 0 ? [{googleSearch: {}}] : undefined,
+            systemInstruction: `You are a triage assistant for Peru.${sourcesContext}
 
 CRITICAL EMERGENCY DETECTION RULES (HIGHEST PRIORITY):
 1. ANY mention of: bleeding heavily, hemorrhage, stabbing, gunshot, severe burns, unconscious, not breathing, choking, seizure, severe chest pain, stroke symptoms -> ALWAYS return urgency: "Emergencia"
@@ -215,8 +230,7 @@ STANDARD RULES (if not emergency):
 - Return valid JSON.
 - If input is clearly not symptoms (e.g. "Hello", "Weather"), return confidence: 0.
 - For mild symptoms (headache, cold), use "Baja" or "Moderada".
-
-IMPORTANT: If you detect life-threatening symptoms, DO NOT downplay the urgency. Better to over-triage than miss a real emergency.`
+- Use the Official Knowledge Base to refine advice if applicable.`
           }
         });
 
@@ -237,11 +251,11 @@ IMPORTANT: If you detect life-threatening symptoms, DO NOT downplay the urgency.
 
       } catch (error) {
         console.error("❌ Gemini analysis failed. Using emergency fallback.", error);
-        // 🚨 SAFETY FALLBACK: If AI fails during potential emergency, assume HIGH urgency
+        // 🚨 SAFETY FALLBACK
         return {
           specialty: "Medicina General (Urgente)",
           specialtyDescription: "No se pudo procesar la consulta. Por seguridad, recomendamos evaluación urgente.",
-          urgency: UrgencyLevel.HIGH, // Changed from MODERATE to HIGH for safety
+          urgency: UrgencyLevel.HIGH,
           urgencyExplanation: "Error en el sistema. Por precaución, acuda a emergencias si los síntomas son severos.",
           detectedSymptoms: ["Error de procesamiento"],
           advice: [
@@ -357,16 +371,24 @@ export const classifyUserIntent = async (text: string): Promise<'triage' | 'phar
 // 💊 MEDICINE ANALYSIS
 // =================================================================
 
-export const analyzeMedications = async (text: string): Promise<MedicineInfo[]> => {
+export const analyzeMedications = async (
+    text: string,
+    activeSources: KnowledgeSource[] = []
+): Promise<MedicineInfo[]> => {
     return callWithRetry(async () => {
         try {
+            const sourcesContext = formatSourcesContext(activeSources);
+            
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
                 contents: `Analyze the medication(s) mentioned in: "${text}". 
                 If multiple meds are found, return a list.
-                Provide usage, dosage (general advice only), warnings, and if prescription is needed in Peru. Spanish.`,
+                Provide usage, dosage (general advice only), warnings, and if prescription is needed in Peru. Spanish.
+                ${sourcesContext ? `Consult the Official Knowledge Base via Google Search if necessary.` : ''}`,
                 config: {
                     responseMimeType: "application/json",
+                    tools: activeSources.length > 0 ? [{googleSearch: {}}] : undefined,
+                    systemInstruction: `You are a pharmaceutical assistant.${sourcesContext}`,
                     responseSchema: {
                         type: Type.ARRAY,
                         items: {
@@ -442,11 +464,6 @@ export const searchNearbyPlaces = async (
             let prompt = "";
             let toolConfig: any = undefined;
 
-            // 🌍 CRITICAL: Geographic pinning based on priority:
-            // 1. Use coordinates if available (most accurate)
-            // 2. Use location string with country code (fallback)
-            // 3. Default to Lima, Peru with strict filter (last resort)
-
             const geoPinning = coords 
                 ? `near latitude ${coords.lat}, longitude ${coords.lng}` 
                 : location 
@@ -461,15 +478,13 @@ export const searchNearbyPlaces = async (
                 };
             }
 
-            // 🚨 EMERGENCY MODE: Force 24h hospitals with ER
+            // 🚨 EMERGENCY MODE
             const emergencyCheck = detectEmergencyKeywords(query);
             if (emergencyCheck.isEmergency) {
                 prompt = `Find 8 hospitals or clinics with 24-hour EMERGENCY ROOMS ${geoPinning}. 
                 Must have: Emergency department, trauma care, surgery capability.
                 Prioritize: Hospitals over clinics.
                 Return names, addresses, phone numbers, ratings.`;
-                
-                console.warn("🚨 EMERGENCY MAP SEARCH:", prompt);
             }
             // 🏥 DIRECTORY MODE
             else if (intent === 'directory') {
@@ -478,7 +493,6 @@ export const searchNearbyPlaces = async (
             } 
             // 💊 PHARMACY MODE (Strict filtering)
             else if (intent === 'pharmacy') {
-                // FIXED: Include 'Pharmacies' explicitly, ignore specific medicine names to ensure results
                 prompt = `Find 8 "Farmacias" or "Boticas" ${geoPinning}. 
                 EXCLUDE: Clínicas, Hospitales, Centros Médicos, Veterinarias.
                 Only return actual pharmacies.`;
@@ -513,24 +527,17 @@ export const searchNearbyPlaces = async (
                              const isPharmacy = /farmacia|botica|apothecary|inkafarma|mifarma/i.test(nameLower);
                              const isClinic = /clinica|hospital|centro m[eé]dico|policl[ií]nico|veterinaria/i.test(nameLower);
                              if (!isPharmacy || isClinic) {
-                                 console.warn("🚫 Filtered non-pharmacy:", source.title);
                                  return; 
                              }
                          }
 
-                         // 🌎 GEOGRAPHIC VALIDATION: Check if result is in Peru
-                         // (Heuristic: If it has a Peru-specific keyword or the URI contains "Peru")
+                         // 🌎 GEOGRAPHIC VALIDATION
                          const isProbablyInPeru = 
                              source.uri.includes('Peru') || 
                              source.uri.includes('Lima') ||
                              nameLower.includes('peru') ||
                              nameLower.includes('lima');
                          
-                         if (!isProbablyInPeru && (coords || location)) {
-                             console.warn("⚠️ Result might not be in Peru:", source.title);
-                             // Still include it, but flag it
-                         }
-
                          let type: MedicalCenter['type'] = intent === 'pharmacy' ? 'Farmacia' : 'Clínica';
                          const has24h = (/hospital|emergencia/i.test(nameLower) && intent === 'triage') || emergencyCheck.isEmergency;
 
@@ -554,11 +561,6 @@ export const searchNearbyPlaces = async (
                 });
             }
 
-            // 📊 VALIDATION: If no results, log the issue
-            if (places.length === 0) {
-                console.error("❌ NO PLACES FOUND. Query:", query, "Location:", location, "Coords:", coords);
-            }
-
             const uniquePlaces = places.filter((v,i,a)=>a.findIndex(v2=>(v2.name === v.name))===i);
 
             return {
@@ -566,7 +568,6 @@ export const searchNearbyPlaces = async (
                 places: uniquePlaces
             };
         } catch (e) {
-            console.error("❌ Maps search failed:", e);
             return { text: "No pude conectar con Google Maps.", places: [] };
         }
     });
@@ -580,12 +581,17 @@ export interface ChatActionResponse {
     query: string;
 }
 
-export const generateFollowUp = async (history: any[], activeFiles: RagDocument[] = []): Promise<ChatActionResponse> => {
+export const generateFollowUp = async (
+    history: any[], 
+    activeFiles: RagDocument[] = [],
+    activeSources: KnowledgeSource[] = []
+): Promise<ChatActionResponse> => {
     return callWithRetry(async () => {
         try {
             const hasFiles = activeFiles.length > 0;
-            // FIXED: Added aggressive instruction to trigger SEARCH_MAPS on confirmation words
-            let systemInstruction = `You are Doctoi. Keep responses short and helpful. Spanish.
+            const sourcesContext = formatSourcesContext(activeSources);
+            
+            let systemInstruction = `You are Doctoi. Keep responses short and helpful. Spanish.${sourcesContext}
             IMPORTANT:
             - If the user explicitly asks where to buy something, where a clinic is, or asks for locations/addresses, set "action" to "SEARCH_MAPS" and "query" to the object they are looking for.
             - If the user confirms a previous question like "Shall I look for it?" with "Yes", "Si", "Dale", "Busca", set "action" to "SEARCH_MAPS".
@@ -599,6 +605,8 @@ export const generateFollowUp = async (history: any[], activeFiles: RagDocument[
                 contents: history,
                 config: { 
                     systemInstruction,
+                    // Use tools if we have active official sources OR location is needed (but Search is better for sources)
+                    tools: activeSources.length > 0 ? [{googleSearch: {}}] : undefined,
                     responseMimeType: "application/json",
                     responseSchema: {
                         type: Type.OBJECT,
